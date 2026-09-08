@@ -1,0 +1,35 @@
+# Editor/IDE
+.idea/
+.vscode/
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+terraform-provider-costfluent
+
+# Test binary and coverage
+*.test
+*.out
+coverage.*
+
+# goreleaser output
+dist/
+
+# Local Terraform state from trying the examples
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+crash.*.log
+
+# Go workspace
+go.work
+go.work.sum
+
+# env file
+.env
