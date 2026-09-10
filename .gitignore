@@ -2,13 +2,15 @@
 .idea/
 .vscode/
 
-# Binaries
+# Binaries. The provider binary is anchored with a leading slash: unanchored, the pattern also
+# matches the cmd/terraform-provider-costfluent package directory, and the publish mirror then
+# copies that source across and quietly declines to commit it.
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-terraform-provider-costfluent
+/terraform-provider-costfluent
 
 # Test binary and coverage
 *.test
