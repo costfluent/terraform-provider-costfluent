@@ -35,6 +35,11 @@ archives:
 checksum:
   name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
   algorithm: sha256
+  # The Terraform Registry requires every release artifact, including the protocol manifest, in
+  # the signed checksum file. release.extra_files uploads it but does not checksum it implicitly.
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
 
 signs:
   - artifacts: checksum
