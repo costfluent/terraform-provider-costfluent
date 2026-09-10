@@ -6,7 +6,10 @@ version: 2
 project_name: terraform-provider-costfluent
 
 builds:
-  - env:
+  # The main package is under cmd/, not at the repository root, and GoReleaser defaults to the root
+  # — without this the build fails with "does not contain a main function".
+  - main: ./cmd/terraform-provider-costfluent
+    env:
       - CGO_ENABLED=0
     mod_timestamp: '{{ .CommitTimestamp }}'
     flags:
