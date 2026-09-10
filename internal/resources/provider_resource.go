@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/costfluent/costfluent-go/costfluent"
+	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"

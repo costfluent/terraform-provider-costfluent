@@ -152,6 +152,74 @@ make docs
 make lint
 ```
 
+## Releasing a New Version
+
+This repository is a published mirror. The source lives in the private Costfluent monorepo at
+`toolkit/terraform-provider`, and every change — including a one-word README fix — is made there and
+synced here. Nothing is ever committed or pushed to the public repository directly: the sync runs
+`rsync --delete` over a hard reset to `origin/main`, so anything that exists only here is destroyed
+by the next publish.
+
+All commands below run from the monorepo root.
+
+### One-time prerequisites
+
+- A clone of the public repository at `~/Repositories/costfluent-public/terraform-provider-costfluent`
+  (or set `COSTFLUENT_PUBLIC_ROOT`).
+- The signing key's `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` as Actions secrets on the public
+  repository. `cf-pgp restore` recovers the key from Bitwarden item `prod-pgp`; the release job
+  fails at "Import gpg key" without them.
+- The provider registered on the Terraform Registry under `costfluent/costfluent` with that key's
+  public half. The registry ingests tagged releases only after this is done.
+
+### Release
+
+```bash
+# 1. Land the change in the monorepo first: branch, PR, merge to dev.
+make check-toolkit
+
+# 2. See exactly what the sync would change in the public repository. Touches nothing.
+scripts/publish-public.sh diff terraform-provider
+
+# 3. Mirror the source into the public repository as a pull request.
+scripts/publish-public.sh publish terraform-provider --pr
+
+# 4. Merge that pull request. The tag in step 5 must point at the mirrored tree.
+gh pr merge --repo costfluent/terraform-provider-costfluent --squash --delete-branch <pr-number>
+
+# 5. Tag the merged main. The tag is the release: it triggers .github/workflows/release.yml in the
+#    public repository, which builds, signs and publishes the artifacts the registry ingests.
+scripts/publish-public.sh release terraform-provider v0.1.0
+
+# 6. Watch the release build.
+gh run watch --repo costfluent/terraform-provider-costfluent
+```
+
+`release` refuses to tag a public `main` that differs from the monorepo directory:
+
+```text
+error: terraform-provider: origin/main of costfluent/terraform-provider-costfluent differs from
+toolkit/terraform-provider. Publish and merge that first.
+```
+
+That means steps 3 and 4 have not landed yet — a tag on a tree nobody reviewed would ship source the
+monorepo never approved. Run `diff` to see the gap, then publish and merge.
+
+Other useful forms:
+
+```bash
+scripts/publish-public.sh list                                 # every mirrored target
+scripts/publish-public.sh publish terraform-provider           # commit locally, do not push
+scripts/publish-public.sh publish terraform-provider --push    # push the branch, no pull request
+scripts/publish-public.sh publish terraform-provider --pr --message "Add segment resource"
+```
+
+A publish that finds no difference does nothing: no commit, no branch, no empty pull request. A
+release skips a target that already carries the tag.
+
+Version numbers are `vX.Y.Z` — the Terraform Registry requires that form and the script rejects
+anything else. Renaming a resource, data source, attribute or output is a major version.
+
 ## License
 
 MIT
