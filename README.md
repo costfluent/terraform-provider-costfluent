@@ -166,9 +166,9 @@ All commands below run from the monorepo root.
 
 - A clone of the public repository at `~/Repositories/costfluent-public/terraform-provider-costfluent`
   (or set `COSTFLUENT_PUBLIC_ROOT`).
-- The signing key's `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` as Actions secrets on the public
-  repository. `cf-pgp restore` recovers the key from Bitwarden item `prod-pgp`; the release job
-  fails at "Import gpg key" without them.
+- `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` present as Actions secrets on the public repository. They
+  are provisioned from the monorepo's GitHub Terraform root rather than set by hand; without them
+  the release job fails at its "Import gpg key" step.
 - The provider registered on the Terraform Registry under `costfluent/costfluent` with that key's
   public half. The registry ingests tagged releases only after this is done.
 
