@@ -10,6 +10,7 @@ resource "costfluent_budget" "prod_budget" {
   amount       = 50000
   currency     = "USD"
   period       = "monthly"
+  start_date   = "2026-01-01"
 }
 
 output "workspace_timezone" {

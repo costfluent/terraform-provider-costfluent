@@ -104,15 +104,18 @@ resource "costfluent_budget" "monthly" {
   amount       = 10000
   currency     = "USD"
   period       = "monthly"
+  start_date   = "2026-01-01"
 
-  alerts {
-    threshold_percent = 80
-    channels          = ["chn_slack"]
-  }
-  alerts {
-    threshold_percent = 100
-    channels          = ["chn_slack", "chn_email"]
-  }
+  alerts = [
+    {
+      threshold_percent = 80
+      channels          = ["chn_slack"]
+    },
+    {
+      threshold_percent = 100
+      channels          = ["chn_slack", "chn_email"]
+    },
+  ]
 }
 ```
 
@@ -120,7 +123,7 @@ resource "costfluent_budget" "monthly" {
 
 ```hcl
 data "costfluent_cost_data" "last_month" {
-  date_range {
+  date_range = {
     type   = "relative"
     period = "last_30_days"
   }
@@ -145,7 +148,7 @@ make test
 # Run acceptance tests (requires COSTFLUENT_API_KEY)
 make testacc
 
-# Generate documentation
+# Regenerate docs/ from the schema and examples/ (requires terraform on PATH)
 make docs
 
 # Lint

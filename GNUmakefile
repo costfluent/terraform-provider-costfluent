@@ -16,8 +16,12 @@ testacc:
 generate:
 	go generate ./...
 
+# Pinned rather than floating: the generated pages are committed and published to the Terraform
+# Registry, and a newer generator rewrites all of them on whoever runs it next.
+TFPLUGINDOCS_VERSION := v0.25.0
+
 docs:
-	go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs
+	TFPLUGINDOCS_VERSION=$(TFPLUGINDOCS_VERSION) scripts/generate-docs.sh
 
 lint:
 	golangci-lint run
