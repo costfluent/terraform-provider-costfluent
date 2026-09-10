@@ -3,13 +3,14 @@ data "costfluent_provider" "aws_main" {
   name = "Production AWS"
 }
 
-# Use provider token in budget filters
+# Scope a budget to that one connection.
 resource "costfluent_budget" "aws_only" {
-  name   = "AWS Budget"
-  amount = 10000
-  period = "monthly"
+  name       = "AWS Budget"
+  amount     = 10000
+  period     = "monthly"
+  start_date = "2026-01-01"
 
-  filters {
+  filters = {
     provider_tokens = [data.costfluent_provider.aws_main.id]
   }
 }

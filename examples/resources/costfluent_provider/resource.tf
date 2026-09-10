@@ -1,3 +1,16 @@
+variable "azure_tenant_id" {
+  type = string
+}
+
+variable "azure_client_id" {
+  type = string
+}
+
+variable "azure_client_secret" {
+  type      = string
+  sensitive = true
+}
+
 resource "costfluent_provider" "aws_main" {
   key  = "aws"
   name = "AWS Production"

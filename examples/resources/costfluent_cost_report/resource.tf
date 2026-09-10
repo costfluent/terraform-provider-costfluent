@@ -1,3 +1,12 @@
+resource "costfluent_workspace" "production" {
+  name     = "Production"
+  currency = "USD"
+}
+
+resource "costfluent_folder" "reports" {
+  name = "Reports"
+}
+
 # A saved cost report: one window, one grouping dimension, one filter, and the money settings the
 # numbers are computed with.
 resource "costfluent_cost_report" "monthly_by_service" {
