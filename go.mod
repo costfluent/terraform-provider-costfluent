@@ -3,7 +3,6 @@ module github.com/costfluent/terraform-provider-costfluent
 go 1.24.0
 
 require (
-	github.com/costfluent/costfluent-go v0.1.0
 	github.com/hashicorp/terraform-plugin-framework v1.16.1
 	github.com/hashicorp/terraform-plugin-framework-validators v0.19.0
 	github.com/hashicorp/terraform-plugin-go v0.29.0
@@ -62,5 +61,3 @@ require (
 	google.golang.org/grpc v1.75.1 // indirect
 	google.golang.org/protobuf v1.36.9 // indirect
 )
-
-replace github.com/costfluent/costfluent-go => ../costfluent-go

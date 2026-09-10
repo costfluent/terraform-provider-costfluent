@@ -29,4 +29,7 @@ fmt:
 tidy:
 	go mod tidy
 
-.PHONY: build install test testacc generate docs lint fmt tidy
+sync-sdk:
+	scripts/sync-sdk.sh
+
+.PHONY: build install test testacc generate docs lint fmt tidy sync-sdk
