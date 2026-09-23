@@ -2,21 +2,22 @@ package resources
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
-	"github.com/hashicorp/terraform-plugin-framework/attr"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 
 var (
@@ -30,40 +31,19 @@ type VirtualTagResource struct {
 }
 
 type VirtualTagResourceModel struct {
-	ID           types.String `tfsdk:"id"`
-	WorkspaceID  types.String `tfsdk:"workspace_id"`
-	Key          types.String `tfsdk:"key"`
-	Name         types.String `tfsdk:"name"`
-	Description  types.String `tfsdk:"description"`
-	Rules        types.List   `tfsdk:"rules"`
-	DefaultValue types.String `tfsdk:"default_value"`
-	IsActive     types.Bool   `tfsdk:"is_active"`
-	CreatedAt    types.String `tfsdk:"created_at"`
-	UpdatedAt    types.String `tfsdk:"updated_at"`
-}
-
-type VirtualTagRuleModel struct {
-	Condition types.Object `tfsdk:"condition"`
-	Value     types.String `tfsdk:"value"`
-	Priority  types.Int64  `tfsdk:"priority"`
-}
-
-type VirtualTagConditionModel struct {
-	Field    types.String `tfsdk:"field"`
-	Operator types.String `tfsdk:"operator"`
-	Value    types.String `tfsdk:"value"`
-}
-
-var virtualTagConditionAttrTypes = map[string]attr.Type{
-	"field":    types.StringType,
-	"operator": types.StringType,
-	"value":    types.StringType,
-}
-
-var virtualTagRuleAttrTypes = map[string]attr.Type{
-	"condition": types.ObjectType{AttrTypes: virtualTagConditionAttrTypes},
-	"value":     types.StringType,
-	"priority":  types.Int64Type,
+	ID              types.String `tfsdk:"id"`
+	WorkspaceID     types.String `tfsdk:"workspace_id"`
+	Key             types.String `tfsdk:"key"`
+	Description     types.String `tfsdk:"description"`
+	ComputationMode types.String `tfsdk:"computation_mode"`
+	Rules           types.String `tfsdk:"rules"`
+	DefaultValue    types.String `tfsdk:"default_value"`
+	Priority        types.Int64  `tfsdk:"priority"`
+	IsActive        types.Bool   `tfsdk:"is_active"`
+	Status          types.String `tfsdk:"status"`
+	LastComputedAt  types.String `tfsdk:"last_computed_at"`
+	CreatedAt       types.String `tfsdk:"created_at"`
+	UpdatedAt       types.String `tfsdk:"updated_at"`
 }
 
 func NewVirtualTagResource() resource.Resource {
@@ -76,84 +56,82 @@ func (r *VirtualTagResource) Metadata(_ context.Context, req resource.MetadataRe
 
 func (r *VirtualTagResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Costfluent virtual tag.",
+		Description: "Manages a Costfluent virtual tag: a tag value derived for cost rows from ordered rules.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
-				Description: "Virtual tag token.",
+				Description: "Virtual tag ID.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"workspace_id": schema.StringAttribute{
 				Optional:    true,
-				Description: "Workspace token. Uses provider default if not specified.",
+				Description: "Workspace ID. Uses the provider's workspace if not specified.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 				Validators: []validator.String{
 					validators.TokenPrefix("wsp_"),
 				},
 			},
 			"key": schema.StringAttribute{
 				Required:    true,
-				Description: "Virtual tag key (used in cost data).",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
-			},
-			"name": schema.StringAttribute{
-				Required:    true,
-				Description: "Virtual tag display name.",
+				Description: "Tag key the virtual tag writes, as it appears in cost data.",
 			},
 			"description": schema.StringAttribute{
 				Optional:    true,
-				Description: "Virtual tag description.",
-			},
-			"rules": schema.ListNestedAttribute{
-				Required:    true,
-				Description: "Tag value mapping rules.",
-				NestedObject: schema.NestedAttributeObject{
-					Attributes: map[string]schema.Attribute{
-						"condition": schema.SingleNestedAttribute{
-							Required:    true,
-							Description: "Rule matching condition.",
-							Attributes: map[string]schema.Attribute{
-								"field": schema.StringAttribute{
-									Required:    true,
-									Description: "Field to match (e.g., service_name, region, account_id).",
-								},
-								"operator": schema.StringAttribute{
-									Required:    true,
-									Description: "Match operator (equals, contains, starts_with, ends_with, regex).",
-								},
-								"value": schema.StringAttribute{
-									Required:    true,
-									Description: "Value to match against.",
-								},
-							},
-						},
-						"value": schema.StringAttribute{
-							Required:    true,
-							Description: "Tag value to assign when condition matches.",
-						},
-						"priority": schema.Int64Attribute{
-							Optional:    true,
-							Description: "Rule priority (higher = evaluated first).",
-						},
-					},
+				Description: "Virtual tag description. Removing it recreates the virtual tag.",
+				PlanModifiers: []planmodifier.String{
+					requiresReplaceWhenRemoved("description"),
 				},
+			},
+			"computation_mode": schema.StringAttribute{
+				Required:    true,
+				Description: "precompute (values stored at ingestion) or queryTime (derived when cost is read).",
+				Validators: []validator.String{
+					stringvalidator.OneOf(costfluent.VirtualTagPrecompute, costfluent.VirtualTagQueryTime),
+				},
+			},
+			"rules": schema.StringAttribute{
+				Required:    true,
+				Description: "The rule set as a JSON document; build it with jsonencode.",
 			},
 			"default_value": schema.StringAttribute{
 				Optional:    true,
-				Description: "Default tag value when no rules match.",
+				Description: "Value for rows no rule matches. Removing it recreates the virtual tag.",
+				PlanModifiers: []planmodifier.String{
+					requiresReplaceWhenRemoved("default_value"),
+				},
+			},
+			"priority": schema.Int64Attribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "Order among the workspace's virtual tags.",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"is_active": schema.BoolAttribute{
 				Optional:    true,
 				Computed:    true,
 				Default:     booldefault.StaticBool(true),
-				Description: "Whether the virtual tag is active.",
+				Description: "Whether the virtual tag is applied to cost data.",
+			},
+			"status": schema.StringAttribute{
+				Computed:    true,
+				Description: "Virtual tag status.",
+			},
+			"last_computed_at": schema.StringAttribute{
+				Computed:    true,
+				Description: "When precomputed values were last written.",
 			},
 			"created_at": schema.StringAttribute{
 				Computed:    true,
 				Description: "Creation timestamp.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"updated_at": schema.StringAttribute{
 				Computed:    true,
@@ -175,13 +153,6 @@ func (r *VirtualTagResource) Configure(_ context.Context, req resource.Configure
 	r.client = client
 }
 
-func (r *VirtualTagResource) getClient(model *VirtualTagResourceModel) *costfluent.Client {
-	if !model.WorkspaceID.IsNull() {
-		return r.client.Workspace(model.WorkspaceID.ValueString())
-	}
-	return r.client
-}
-
 func (r *VirtualTagResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan VirtualTagResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -189,40 +160,30 @@ func (r *VirtualTagResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	client := r.getClient(&plan)
-
-	rules, diags := convertVirtualTagRulesToAPI(ctx, plan.Rules)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
 	input := &costfluent.CreateVirtualTagInput{
-		Key:   plan.Key.ValueString(),
-		Name:  plan.Name.ValueString(),
-		Rules: rules,
+		WorkspaceID:     plan.WorkspaceID.ValueString(),
+		Key:             plan.Key.ValueString(),
+		ComputationMode: plan.ComputationMode.ValueString(),
+		Rules:           plan.Rules.ValueString(),
+		Description:     knownString(plan.Description),
+		DefaultValue:    knownString(plan.DefaultValue),
+	}
+	if !plan.Priority.IsNull() && !plan.Priority.IsUnknown() {
+		priority := int(plan.Priority.ValueInt64())
+		input.Priority = &priority
 	}
 
-	if !plan.Description.IsNull() {
-		desc := plan.Description.ValueString()
-		input.Description = &desc
-	}
-	if !plan.DefaultValue.IsNull() {
-		dv := plan.DefaultValue.ValueString()
-		input.DefaultValue = &dv
-	}
-	if !plan.IsActive.IsNull() {
-		a := plan.IsActive.ValueBool()
-		input.IsActive = &a
-	}
-
-	tag, err := client.CreateVirtualTag(ctx, input)
+	tag, err := r.client.CreateVirtualTag(ctx, input)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create virtual tag", err.Error())
 		return
 	}
+	if tag, err = r.setActive(ctx, plan.WorkspaceID.ValueString(), tag, plan.IsActive.ValueBool()); err != nil {
+		resp.Diagnostics.AddError("Failed to change virtual tag activation", err.Error())
+		return
+	}
 
-	mapVirtualTagToModel(ctx, tag, &plan)
+	mapVirtualTagToModel(tag, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -233,8 +194,7 @@ func (r *VirtualTagResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	client := r.getClient(&state)
-	tag, err := client.GetVirtualTag(ctx, state.ID.ValueString())
+	tag, err := r.client.GetVirtualTag(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -244,7 +204,7 @@ func (r *VirtualTagResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	mapVirtualTagToModel(ctx, tag, &state)
+	mapVirtualTagToModel(tag, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
@@ -256,69 +216,58 @@ func (r *VirtualTagResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	client := r.getClient(&state)
-	input := &costfluent.UpdateVirtualTagInput{}
-
-	if !plan.Name.Equal(state.Name) {
-		name := plan.Name.ValueString()
-		input.Name = &name
+	input := &costfluent.UpdateVirtualTagInput{WorkspaceID: state.WorkspaceID.ValueString()}
+	if !plan.Key.Equal(state.Key) {
+		input.Key = plan.Key.ValueStringPointer()
 	}
 	if !plan.Description.Equal(state.Description) {
-		if plan.Description.IsNull() {
-			empty := ""
-			input.Description = &empty
-		} else {
-			desc := plan.Description.ValueString()
-			input.Description = &desc
-		}
+		input.Description = knownString(plan.Description)
+	}
+	if !plan.ComputationMode.Equal(state.ComputationMode) {
+		input.ComputationMode = plan.ComputationMode.ValueStringPointer()
 	}
 	if !plan.Rules.Equal(state.Rules) {
-		rules, diags := convertVirtualTagRulesToAPI(ctx, plan.Rules)
-		resp.Diagnostics.Append(diags...)
-		if resp.Diagnostics.HasError() {
-			return
-		}
-		input.Rules = rules
+		input.Rules = plan.Rules.ValueStringPointer()
 	}
 	if !plan.DefaultValue.Equal(state.DefaultValue) {
-		if plan.DefaultValue.IsNull() {
-			empty := ""
-			input.DefaultValue = &empty
-		} else {
-			dv := plan.DefaultValue.ValueString()
-			input.DefaultValue = &dv
-		}
+		input.DefaultValue = knownString(plan.DefaultValue)
+	}
+	if !plan.Priority.IsUnknown() && !plan.Priority.Equal(state.Priority) {
+		priority := int(plan.Priority.ValueInt64())
+		input.Priority = &priority
 	}
 
-	tag, err := client.UpdateVirtualTag(ctx, state.ID.ValueString(), input)
+	tag, err := r.client.UpdateVirtualTag(ctx, state.ID.ValueString(), input)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update virtual tag", err.Error())
 		return
 	}
-
-	// Handle activation/deactivation separately
-	if !plan.IsActive.Equal(state.IsActive) {
-		if plan.IsActive.ValueBool() {
-			if err := client.ActivateVirtualTag(ctx, tag.Token); err != nil {
-				resp.Diagnostics.AddError("Failed to activate virtual tag", err.Error())
-				return
-			}
-		} else {
-			if err := client.DeactivateVirtualTag(ctx, tag.Token); err != nil {
-				resp.Diagnostics.AddError("Failed to deactivate virtual tag", err.Error())
-				return
-			}
-		}
-		// Re-fetch to get updated state
-		tag, err = client.GetVirtualTag(ctx, tag.Token)
-		if err != nil {
-			resp.Diagnostics.AddError("Failed to read virtual tag after activation change", err.Error())
-			return
-		}
+	if tag, err = r.setActive(ctx, state.WorkspaceID.ValueString(), tag, plan.IsActive.ValueBool()); err != nil {
+		resp.Diagnostics.AddError("Failed to change virtual tag activation", err.Error())
+		return
 	}
 
-	mapVirtualTagToModel(ctx, tag, &plan)
+	mapVirtualTagToModel(tag, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+}
+
+// setActive activates or deactivates the tag when its status differs from the configuration.
+func (r *VirtualTagResource) setActive(
+	ctx context.Context, workspaceID string, tag *costfluent.VirtualTag, active bool,
+) (*costfluent.VirtualTag, error) {
+	if isVirtualTagActive(tag) == active {
+		return tag, nil
+	}
+	var err error
+	if active {
+		err = r.client.ActivateVirtualTag(ctx, workspaceID, tag.ID)
+	} else {
+		err = r.client.DeactivateVirtualTag(ctx, workspaceID, tag.ID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.client.GetVirtualTag(ctx, workspaceID, tag.ID)
 }
 
 func (r *VirtualTagResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -328,8 +277,7 @@ func (r *VirtualTagResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	client := r.getClient(&state)
-	err := client.DeleteVirtualTag(ctx, state.ID.ValueString())
+	err := r.client.DeleteVirtualTag(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		return
 	}
@@ -338,75 +286,38 @@ func (r *VirtualTagResource) Delete(ctx context.Context, req resource.DeleteRequ
 	}
 }
 
+// ImportState takes "<workspace ID>:<ID>", or a bare ID in the provider's workspace.
 func (r *VirtualTagResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importOptionallyWorkspaceScoped(ctx, req, resp)
 }
 
-func convertVirtualTagRulesToAPI(ctx context.Context, rulesList types.List) ([]costfluent.VirtualTagRule, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	var rules []VirtualTagRuleModel
-	diags.Append(rulesList.ElementsAs(ctx, &rules, false)...)
-	if diags.HasError() {
-		return nil, diags
-	}
-
-	result := make([]costfluent.VirtualTagRule, len(rules))
-	for i, r := range rules {
-		var cond VirtualTagConditionModel
-		diags.Append(r.Condition.As(ctx, &cond, basetypes.ObjectAsOptions{})...)
-
-		result[i] = costfluent.VirtualTagRule{
-			Condition: costfluent.VirtualTagCondition{
-				Field:    cond.Field.ValueString(),
-				Operator: cond.Operator.ValueString(),
-				Value:    cond.Value.ValueString(),
-			},
-			Value: r.Value.ValueString(),
-		}
-		if !r.Priority.IsNull() {
-			result[i].Priority = int(r.Priority.ValueInt64())
-		}
-	}
-	return result, diags
+func isVirtualTagActive(t *costfluent.VirtualTag) bool {
+	return strings.EqualFold(t.Status, "active")
 }
 
-func mapVirtualTagToModel(ctx context.Context, t *costfluent.VirtualTag, model *VirtualTagResourceModel) {
-	model.ID = types.StringValue(t.Token)
+func mapVirtualTagToModel(t *costfluent.VirtualTag, model *VirtualTagResourceModel) {
+	model.ID = types.StringValue(t.ID)
 	model.Key = types.StringValue(t.Key)
-	model.Name = types.StringValue(t.Name)
-	model.IsActive = types.BoolValue(t.IsActive)
+	model.Description = types.StringPointerValue(t.Description)
+	model.ComputationMode = sameEnum(model.ComputationMode, t.ComputationMode)
+	if !sameJSON(model.Rules.ValueString(), t.Rules) {
+		model.Rules = types.StringValue(t.Rules)
+	}
+	model.DefaultValue = types.StringPointerValue(t.DefaultValue)
+	model.Priority = types.Int64Value(int64(t.Priority))
+	model.IsActive = types.BoolValue(isVirtualTagActive(t))
+	model.Status = types.StringValue(t.Status)
+	model.LastComputedAt = optionalTime(t.LastComputedAt)
 	model.CreatedAt = types.StringValue(t.CreatedAt.Format(time.RFC3339))
+	model.UpdatedAt = optionalTime(t.UpdatedAt)
+}
 
-	if t.Description != nil {
-		model.Description = types.StringValue(*t.Description)
-	} else {
-		model.Description = types.StringNull()
+// sameJSON reports whether two documents are equal as JSON, so a stored rule set that differs from
+// the configuration only in whitespace or key order does not plan a change.
+func sameJSON(a, b string) bool {
+	var x, y any
+	if json.Unmarshal([]byte(a), &x) != nil || json.Unmarshal([]byte(b), &y) != nil {
+		return a == b
 	}
-	if t.DefaultValue != nil {
-		model.DefaultValue = types.StringValue(*t.DefaultValue)
-	} else {
-		model.DefaultValue = types.StringNull()
-	}
-	if t.UpdatedAt != nil {
-		model.UpdatedAt = types.StringValue(t.UpdatedAt.Format(time.RFC3339))
-	} else {
-		model.UpdatedAt = types.StringNull()
-	}
-
-	// Map rules
-	ruleModels := make([]VirtualTagRuleModel, len(t.Rules))
-	for i, r := range t.Rules {
-		condObj, _ := types.ObjectValueFrom(ctx, virtualTagConditionAttrTypes, VirtualTagConditionModel{
-			Field:    types.StringValue(r.Condition.Field),
-			Operator: types.StringValue(r.Condition.Operator),
-			Value:    types.StringValue(r.Condition.Value),
-		})
-		ruleModels[i] = VirtualTagRuleModel{
-			Condition: condObj,
-			Value:     types.StringValue(r.Value),
-			Priority:  types.Int64Value(int64(r.Priority)),
-		}
-	}
-	rulesList, _ := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: virtualTagRuleAttrTypes}, ruleModels)
-	model.Rules = rulesList
+	return reflect.DeepEqual(x, y)
 }

@@ -176,7 +176,7 @@ func (r *SegmentResource) Read(ctx context.Context, req resource.ReadRequest, re
 	// There is no single-segment read on the contract, and adding one just for Terraform would be a
 	// route with one caller. The listing is already scoped to the workspace, so finding the row in
 	// it costs one request either way.
-	list, err := r.client.ListSegments(ctx, state.WorkspaceID.ValueString())
+	segments, err := r.client.ListSegments(ctx, state.WorkspaceID.ValueString())
 	if costfluent.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -186,9 +186,9 @@ func (r *SegmentResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	for i := range list.Segments {
-		if list.Segments[i].ID == state.ID.ValueString() {
-			mapSegmentToModel(&list.Segments[i], &state)
+	for i := range segments {
+		if segments[i].ID == state.ID.ValueString() {
+			mapSegmentToModel(&segments[i], &state)
 			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 			return
 		}

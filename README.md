@@ -44,7 +44,7 @@ provider "costfluent" {
 | Variable | Description |
 |----------|-------------|
 | `COSTFLUENT_API_KEY` | API key for authentication |
-| `COSTFLUENT_WORKSPACE` | Default workspace token |
+| `COSTFLUENT_WORKSPACE` | Default workspace ID for workspace-scoped resources |
 | `COSTFLUENT_BASE_URL` | API base URL override |
 
 ## Resources
@@ -53,6 +53,7 @@ provider "costfluent" {
 |----------|-------------|
 | `costfluent_workspace` | Manage workspaces |
 | `costfluent_provider` | Cloud provider connections (AWS, Azure, GCP, etc.) |
+| `costfluent_gcp_service_account` | The service account Costfluent operates for your organization in GCP; grant it BigQuery Data Viewer on your billing export |
 | `costfluent_folder` | Hierarchical organization folders |
 | `costfluent_budget` | Cost budgets with alerts |
 | `costfluent_cost_alert` | Threshold-based cost alerts |
@@ -66,13 +67,14 @@ provider "costfluent" {
 
 | Data Source | Description |
 |-------------|-------------|
-| `costfluent_workspace` | Lookup workspace by token or name |
+| `costfluent_workspace` | Lookup workspace by ID or name |
 | `costfluent_workspaces` | List all workspaces |
-| `costfluent_provider` | Lookup provider by token or name |
+| `costfluent_provider` | Lookup provider by ID or name |
 | `costfluent_providers` | List all providers |
 | `costfluent_anomalies` | List detected cost anomalies |
-| `costfluent_cost_summary` | Current cost summary |
+| `costfluent_cost_summary` | Cost summary for a window |
 | `costfluent_cost_data` | Query cost data (may be slow) |
+| `costfluent_aws_provider_info` | The principal and external ID an AWS role must trust, for the `costfluent/cost-access/aws` module |
 
 ## Example Usage
 
@@ -80,18 +82,26 @@ provider "costfluent" {
 
 ```hcl
 resource "costfluent_workspace" "production" {
-  name        = "Production"
-  description = "Production environment costs"
-  currency    = "USD"
-  timezone    = "America/New_York"
+  name     = "Production"
+  currency = "EUR"
+}
+
+data "costfluent_aws_provider_info" "this" {}
+
+module "costfluent_aws" {
+  source  = "costfluent/cost-access/aws"
+  version = "~> 0.2"
+
+  costfluent_principal_arn = data.costfluent_aws_provider_info.this.principal_arn
+  external_id              = data.costfluent_aws_provider_info.this.external_id
+  cost_export_bucket_name  = "acme-costfluent-export"
 }
 
 resource "costfluent_provider" "aws" {
-  key  = "aws"
-  name = "Production AWS"
-  credentials = {
-    role_arn = "arn:aws:iam::123456789:role/CostfluentRole"
-  }
+  key         = "aws"
+  name        = "Production AWS"
+  credentials = module.costfluent_aws.credentials
+  settings    = module.costfluent_aws.settings
 }
 ```
 
@@ -102,19 +112,12 @@ resource "costfluent_budget" "monthly" {
   workspace_id = costfluent_workspace.production.id
   name         = "Monthly Budget"
   amount       = 10000
-  currency     = "USD"
-  period       = "monthly"
-  start_date   = "2026-01-01"
+  currency     = "EUR"
+  period       = "Monthly"
 
   alerts = [
-    {
-      threshold_percent = 80
-      channels          = ["chn_slack"]
-    },
-    {
-      threshold_percent = 100
-      channels          = ["chn_slack", "chn_email"]
-    },
+    { threshold_percent = 80 },
+    { threshold_percent = 100 },
   ]
 }
 ```
@@ -122,17 +125,15 @@ resource "costfluent_budget" "monthly" {
 ### Cost Data Query
 
 ```hcl
-data "costfluent_cost_data" "last_month" {
-  date_range = {
-    type   = "relative"
-    period = "last_30_days"
-  }
-  group_by = ["service", "region"]
-  limit    = 100
+data "costfluent_cost_data" "september" {
+  start_date = "2026-09-01"
+  end_date   = "2026-09-30"
+  group_by   = "Service"
+  limit      = 100
 }
 
-output "top_services" {
-  value = data.costfluent_cost_data.last_month.data
+output "daily_by_service" {
+  value = data.costfluent_cost_data.september.data
 }
 ```
 
@@ -167,7 +168,7 @@ All commands below run from the monorepo root.
 
 ### One-time prerequisites
 
-- A clone of the public repository at `~/Repositories/costfluent-public/terraform-provider-costfluent`
+- A clone of the public repository at `~/costfluent-public/terraform-provider-costfluent`
   (or set `COSTFLUENT_PUBLIC_ROOT`).
 - `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` present as Actions secrets on the public repository. They
   are provisioned from the monorepo's GitHub Terraform root rather than set by hand; without them
@@ -211,7 +212,7 @@ monorepo never approved. Run `diff` to see the gap, then publish and merge.
 Other useful forms:
 
 ```bash
-scripts/publish-public.sh list                                 # every mirrored target
+scripts/publish-public.sh list                                 # every target's checkout status/path
 scripts/publish-public.sh publish terraform-provider           # commit locally, do not push
 scripts/publish-public.sh publish terraform-provider --push    # push the branch, no pull request
 scripts/publish-public.sh publish terraform-provider --pr --message "Add segment resource"

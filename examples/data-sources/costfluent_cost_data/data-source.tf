@@ -1,41 +1,31 @@
-# Query the last 30 days of cost, grouped by service.
+# Daily cost for September, grouped by service.
 data "costfluent_cost_data" "by_service" {
-  date_range = {
-    type   = "relative"
-    period = "last_30_days"
-  }
-
-  group_by = ["service"]
-  metrics  = ["billed_cost", "effective_cost"]
-  limit    = 20
+  start_date = "2026-09-01"
+  end_date   = "2026-09-30"
+  group_by   = "Service"
+  limit      = 100
 }
 
 output "total_cost" {
-  value = data.costfluent_cost_data.by_service.totals.billed_cost
+  value = data.costfluent_cost_data.by_service.total_cost
 }
 
-output "top_services" {
+output "daily_service_cost" {
   value = [for row in data.costfluent_cost_data.by_service.data : {
-    service = row.dimensions["service"]
-    cost    = row.billed_cost
+    date    = row.date
+    service = row.dimensions["Service"]
+    cost    = row.cost
   }]
 }
 
-# An absolute window instead of a preset, narrowed to one region.
-data "costfluent_cost_data" "us_east_q1" {
-  date_range = {
-    type       = "absolute"
-    start_date = "2026-01-01"
-    end_date   = "2026-03-31"
-  }
-
-  filters = {
-    region = "us-east-1"
-  }
-
-  group_by = ["service", "account"]
+# Monthly cost for the first quarter, narrowed to one region.
+data "costfluent_cost_data" "eu_west_q1" {
+  start_date  = "2026-01-01"
+  end_date    = "2026-03-31"
+  granularity = "Month"
+  filter      = "region = 'eu-west-1'"
 }
 
-output "us_east_total" {
-  value = data.costfluent_cost_data.us_east_q1.totals.effective_cost
+output "eu_west_total" {
+  value = data.costfluent_cost_data.eu_west_q1.total_cost
 }

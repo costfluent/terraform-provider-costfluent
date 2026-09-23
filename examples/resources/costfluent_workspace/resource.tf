@@ -1,12 +1,13 @@
 resource "costfluent_workspace" "production" {
-  name        = "Production"
-  description = "Production environment cost tracking"
-  currency    = "USD"
-  timezone    = "America/New_York"
+  name     = "Production"
+  currency = "EUR"
 }
 
-resource "costfluent_workspace" "staging" {
-  name     = "Staging"
-  currency = "USD"
-  timezone = "UTC"
+# Costs billed in other currencies are converted into GBP at each month's average rate.
+resource "costfluent_workspace" "uk" {
+  name                       = "UK"
+  currency                   = "GBP"
+  enable_currency_conversion = true
+  conversion_currency        = "GBP"
+  conversion_method          = "monthlyAverage"
 }

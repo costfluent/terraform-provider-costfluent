@@ -93,8 +93,7 @@ type ReorderAllocationRulesInput struct {
 // The order is the meaning of the set, so this is also the export: a customer keeping their mapping
 // in version control gets the same sequence the query engine evaluates.
 func (c *Client) ListAllocationRules(ctx context.Context, workspaceID string) ([]AllocationRule, error) {
-	req, err := c.newRequest(ctx, http.MethodGet,
-		"/v1/allocation/rules?workspaceId="+url.QueryEscape(workspaceID), nil)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/allocation/rules", workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -126,9 +125,7 @@ func (c *Client) CreateAllocationRule(
 func (c *Client) UpdateAllocationRule(
 	ctx context.Context, workspaceID, ruleID string, input *UpdateAllocationRuleInput,
 ) (*AllocationRule, error) {
-	req, err := c.newRequest(ctx, http.MethodPut,
-		"/v1/allocation/rules/"+url.PathEscape(ruleID)+"?workspaceId="+url.QueryEscape(workspaceID),
-		input)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodPut, "/v1/allocation/rules/"+url.PathEscape(ruleID), workspaceID, input)
 	if err != nil {
 		return nil, err
 	}
@@ -161,9 +158,7 @@ func (c *Client) ReorderAllocationRules(
 // Allocation is evaluated at query time, so this restates every past month immediately — which is
 // the point, not a side effect.
 func (c *Client) DeleteAllocationRule(ctx context.Context, workspaceID, ruleID string) error {
-	req, err := c.newRequest(ctx, http.MethodDelete,
-		"/v1/allocation/rules/"+url.PathEscape(ruleID)+"?workspaceId="+url.QueryEscape(workspaceID),
-		nil)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodDelete, "/v1/allocation/rules/"+url.PathEscape(ruleID), workspaceID, nil)
 	if err != nil {
 		return err
 	}
@@ -217,13 +212,12 @@ func (c *Client) GetAllocationCoverage(
 	}
 
 	path := fmt.Sprintf(
-		"/v1/allocation/coverage?workspaceId=%s&windowStart=%s&windowEndExclusive=%s&costBasis=%s",
-		url.QueryEscape(workspaceID),
+		"/v1/allocation/coverage?windowStart=%s&windowEndExclusive=%s&costBasis=%s",
 		url.QueryEscape(windowStart),
 		url.QueryEscape(windowEndExclusive),
 		url.QueryEscape(costBasis))
 
-	req, err := c.newRequest(ctx, http.MethodGet, path, nil)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, path, workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}

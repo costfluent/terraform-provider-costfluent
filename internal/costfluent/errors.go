@@ -6,41 +6,85 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
-// APIError represents an error from the Costfluent API
+// APIError is an error response from the Costfluent API, decoded from its problem details.
 type APIError struct {
-	StatusCode int            `json:"-"`
-	Code       string         `json:"code"`
-	Message    string         `json:"message"`
-	Details    map[string]any `json:"details,omitempty"`
-	TraceID    string         `json:"trace_id,omitempty"`
+	StatusCode int          `json:"-"`
+	Type       string       `json:"type,omitempty"`
+	Title      string       `json:"title,omitempty"`
+	Status     int          `json:"status,omitempty"`
+	Detail     string       `json:"detail,omitempty"`
+	Instance   string       `json:"instance,omitempty"`
+	TraceID    string       `json:"traceId,omitempty"`
+	Errors     []FieldError `json:"errors,omitempty"`
+}
+
+// FieldError is one entry of a problem's errors: a validation failure on Name, or a general
+// error when the API has no field to name.
+type FieldError struct {
+	Name     string `json:"name"`
+	Reason   string `json:"reason"`
+	Code     string `json:"code,omitempty"`
+	Severity string `json:"severity,omitempty"`
+}
+
+// Message is the most specific description the response carried.
+func (e *APIError) Message() string {
+	if e.Detail != "" {
+		return e.Detail
+	}
+	if len(e.Errors) > 0 {
+		reasons := make([]string, 0, len(e.Errors))
+		for _, fe := range e.Errors {
+			reasons = append(reasons, fe.Reason)
+		}
+		return strings.Join(reasons, "; ")
+	}
+	if e.Title != "" {
+		return e.Title
+	}
+	return http.StatusText(e.StatusCode)
 }
 
 func (e *APIError) Error() string {
 	if e.TraceID != "" {
-		return fmt.Sprintf("costfluent: %s (%d) [%s] trace_id=%s",
-			e.Message, e.StatusCode, e.Code, e.TraceID)
+		return fmt.Sprintf("costfluent: %s (%d) traceId=%s", e.Message(), e.StatusCode, e.TraceID)
 	}
-	return fmt.Sprintf("costfluent: %s (%d) [%s]", e.Message, e.StatusCode, e.Code)
+	return fmt.Sprintf("costfluent: %s (%d)", e.Message(), e.StatusCode)
 }
 
 func parseError(resp *http.Response) error {
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
-	var apiErr APIError
-	apiErr.StatusCode = resp.StatusCode
-	apiErr.TraceID = resp.Header.Get("X-Trace-Id")
-
+	apiErr := APIError{StatusCode: resp.StatusCode}
 	if err := json.Unmarshal(body, &apiErr); err != nil {
-		apiErr.Code = http.StatusText(resp.StatusCode)
-		apiErr.Message = string(body)
-		if apiErr.Message == "" {
-			apiErr.Message = http.StatusText(resp.StatusCode)
+		apiErr = APIError{StatusCode: resp.StatusCode, Detail: strings.TrimSpace(string(body))}
+	}
+	return &apiErr
+}
+
+// CodeGcpAccessPending is the error code for a GCP connection whose billing export dataset is not
+// shared with the organization's service account yet, or whose grant has not propagated.
+const CodeGcpAccessPending = "Provider.GcpAccessPending"
+
+// CodeAwsAccessPending is the error code for an AWS connection whose role does not trust
+// Costfluent's principal with the organization's external ID yet, or has not propagated.
+const CodeAwsAccessPending = "Provider.AwsAccessPending"
+
+// HasCode returns true if err is an API error carrying code on one of its errors.
+func HasCode(err error, code string) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	for _, fe := range apiErr.Errors {
+		if fe.Code == code {
+			return true
 		}
 	}
-
-	return &apiErr
+	return false
 }
 
 // IsNotFound returns true if err is a 404 Not Found error

@@ -36,12 +36,6 @@ type Segment struct {
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
 }
 
-// SegmentList is the listing shape.
-type SegmentList struct {
-	Segments []Segment `json:"segments"`
-	Total    int       `json:"total"`
-}
-
 // CreateSegmentInput creates an allocation segment. Set IsShared for a shared-cost bucket, in
 // which case the identifying fields are left empty.
 type CreateSegmentInput struct {
@@ -63,18 +57,17 @@ type UpdateSegmentInput struct {
 }
 
 // ListSegments returns a workspace's allocation segments.
-func (c *Client) ListSegments(ctx context.Context, workspaceID string) (*SegmentList, error) {
-	req, err := c.newRequest(ctx, http.MethodGet,
-		"/v1/segments?workspaceId="+url.QueryEscape(workspaceID), nil)
+func (c *Client) ListSegments(ctx context.Context, workspaceID string) ([]Segment, error) {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/segments", workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var list SegmentList
-	if err := c.do(req, &list); err != nil {
+	var segments []Segment
+	if err := c.do(req, &segments); err != nil {
 		return nil, err
 	}
-	return &list, nil
+	return segments, nil
 }
 
 // CreateSegment creates an allocation segment.
@@ -95,8 +88,7 @@ func (c *Client) CreateSegment(ctx context.Context, input *CreateSegmentInput) (
 func (c *Client) UpdateSegment(
 	ctx context.Context, workspaceID, segmentID string, input *UpdateSegmentInput,
 ) (*Segment, error) {
-	req, err := c.newRequest(ctx, http.MethodPut,
-		"/v1/segments/"+url.PathEscape(segmentID)+"?workspaceId="+url.QueryEscape(workspaceID), input)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodPut, "/v1/segments/"+url.PathEscape(segmentID), workspaceID, input)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +103,7 @@ func (c *Client) UpdateSegment(
 // DeleteSegment removes an allocation segment. The API refuses while any rule still assigns cost
 // to it.
 func (c *Client) DeleteSegment(ctx context.Context, workspaceID, segmentID string) error {
-	req, err := c.newRequest(ctx, http.MethodDelete,
-		"/v1/segments/"+url.PathEscape(segmentID)+"?workspaceId="+url.QueryEscape(workspaceID), nil)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodDelete, "/v1/segments/"+url.PathEscape(segmentID), workspaceID, nil)
 	if err != nil {
 		return err
 	}

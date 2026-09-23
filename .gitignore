@@ -1,6 +1,5 @@
 # Editor/IDE
 .idea/
-.vscode/
 
 # Binaries. The provider binary is anchored with a leading slash: unanchored, the pattern also
 # matches the cmd/terraform-provider-costfluent package directory, and the publish mirror then

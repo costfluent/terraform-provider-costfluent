@@ -17,19 +17,29 @@ func TestAccBudget_basic(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create
 			{
-				Config: testAccBudgetConfig(rName),
+				Config: testAccBudgetConfig(rName, 1000),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttrSet("costfluent_budget.test", "id"),
 					resource.TestCheckResourceAttr("costfluent_budget.test", "name", rName),
 					resource.TestCheckResourceAttr("costfluent_budget.test", "amount", "1000"),
-					resource.TestCheckResourceAttr("costfluent_budget.test", "period", "monthly"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "currency", "EUR"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "period", "Monthly"),
+					resource.TestCheckResourceAttrSet("costfluent_budget.test", "spend_availability"),
 				),
 			},
-			// Import
+			// Import: the API does not return the workspace a budget was created in.
 			{
-				ResourceName:      "costfluent_budget.test",
-				ImportState:       true,
-				ImportStateVerify: true,
+				ResourceName:            "costfluent_budget.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"workspace_id"},
+			},
+			// Update in place
+			{
+				Config: testAccBudgetConfig(rName, 2000),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_budget.test", "amount", "2000"),
+				),
 			},
 		},
 	})
@@ -47,37 +57,39 @@ func TestAccBudget_withAlerts(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttrSet("costfluent_budget.test", "id"),
 					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.#", "2"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.0.threshold_percent", "80"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.1.threshold_percent", "100"),
 				),
 			},
 		},
 	})
 }
 
-func testAccBudgetConfig(name string) string {
-	return fmt.Sprintf(`
+func testAccBudgetConfig(name string, amount int) string {
+	return testAccWorkspaceFixture(name) + fmt.Sprintf(`
 resource "costfluent_budget" "test" {
-  name     = %q
-  amount   = 1000
-  currency = "USD"
-  period   = "monthly"
+  workspace_id = costfluent_workspace.fixture.id
+  name         = %q
+  amount       = %d
+  currency     = "EUR"
+  period       = "Monthly"
 }
-`, name)
+`, name, amount)
 }
 
 func testAccBudgetConfigWithAlerts(name string) string {
-	return fmt.Sprintf(`
+	return testAccWorkspaceFixture(name) + fmt.Sprintf(`
 resource "costfluent_budget" "test" {
-  name     = %q
-  amount   = 5000
-  currency = "USD"
-  period   = "monthly"
+  workspace_id = costfluent_workspace.fixture.id
+  name         = %q
+  amount       = 5000
+  currency     = "EUR"
+  period       = "Monthly"
 
-  alerts {
-    threshold_percent = 80
-  }
-  alerts {
-    threshold_percent = 100
-  }
+  alerts = [
+    { threshold_percent = 80 },
+    { threshold_percent = 100 },
+  ]
 }
 `, name)
 }

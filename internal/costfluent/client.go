@@ -1,6 +1,7 @@
 package costfluent
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -51,7 +52,7 @@ func NewClient(opts ...Option) *Client {
 	return c
 }
 
-// Workspace returns a new client scoped to a specific workspace
+// Workspace returns a new client whose default workspace is workspaceID
 func (c *Client) Workspace(workspaceID string) *Client {
 	clone := *c
 	clone.workspaceID = workspaceID
@@ -61,4 +62,26 @@ func (c *Client) Workspace(workspaceID string) *Client {
 // BaseURL returns the base URL of the client
 func (c *Client) BaseURL() string {
 	return c.baseURL
+}
+
+var errNoWorkspace = errors.New("costfluent: this operation is workspace-scoped: pass a workspace ID or set WithWorkspace")
+
+// workspace resolves the workspace an operation targets: an explicit ID wins over the default.
+func (c *Client) workspace(workspaceID string) string {
+	if workspaceID != "" {
+		return workspaceID
+	}
+	return c.workspaceID
+}
+
+func (c *Client) requireWorkspace(workspaceID string) (string, error) {
+	if id := c.workspace(workspaceID); id != "" {
+		return id, nil
+	}
+	return "", errNoWorkspace
+}
+
+// createdRef is the part of a *Created response the SDK reads before fetching the full object.
+type createdRef struct {
+	ID string `json:"id"`
 }

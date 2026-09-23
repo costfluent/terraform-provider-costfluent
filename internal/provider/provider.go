@@ -121,6 +121,7 @@ func (p *CostfluentProvider) Resources(_ context.Context) []func() resource.Reso
 	return []func() resource.Resource{
 		resources.NewWorkspaceResource,
 		resources.NewProviderResource,
+		resources.NewGcpServiceAccountResource,
 		resources.NewFolderResource,
 		resources.NewBudgetResource,
 		resources.NewCostAlertResource,
@@ -143,5 +144,6 @@ func (p *CostfluentProvider) DataSources(_ context.Context) []func() datasource.
 		datasources.NewCostSummaryDataSource,
 		datasources.NewCostDataDataSource,
 		datasources.NewEntitlementDataSource,
+		datasources.NewAwsProviderInfoDataSource,
 	}
 }

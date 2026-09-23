@@ -2,11 +2,9 @@ package resources
 
 import (
 	"context"
-	"time"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -28,12 +26,9 @@ type FolderResource struct {
 type FolderResourceModel struct {
 	ID          types.String `tfsdk:"id"`
 	WorkspaceID types.String `tfsdk:"workspace_id"`
-	Name        types.String `tfsdk:"name"`
-	Description types.String `tfsdk:"description"`
-	ParentToken types.String `tfsdk:"parent_token"`
-	Path        types.String `tfsdk:"path"`
-	CreatedAt   types.String `tfsdk:"created_at"`
-	UpdatedAt   types.String `tfsdk:"updated_at"`
+	Title       types.String `tfsdk:"title"`
+	ParentID    types.String `tfsdk:"parent_id"`
+	ReportCount types.Int64  `tfsdk:"report_count"`
 }
 
 func NewFolderResource() resource.Resource {
@@ -46,45 +41,40 @@ func (r *FolderResource) Metadata(_ context.Context, req resource.MetadataReques
 
 func (r *FolderResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Costfluent folder for hierarchical organization.",
+		Description: "Manages a Costfluent folder for organizing cost reports.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
-				Description: "Folder token.",
+				Description: "Folder ID.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"workspace_id": schema.StringAttribute{
 				Optional:    true,
-				Description: "Workspace token. Uses provider default if not specified.",
+				Description: "Workspace ID. Uses the provider's workspace if not specified.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 				Validators: []validator.String{
 					validators.TokenPrefix("wsp_"),
 				},
 			},
-			"name": schema.StringAttribute{
+			"title": schema.StringAttribute{
 				Required:    true,
-				Description: "Folder name.",
+				Description: "Folder title.",
 			},
-			"description": schema.StringAttribute{
-				Optional:    true,
-				Description: "Folder description.",
+			"parent_id": schema.StringAttribute{
+				Optional: true,
+				Description: "ID of the folder this one sits in. Omit for a top-level folder; removing it " +
+					"recreates the folder, because the API cannot move a folder back to the top level.",
+				PlanModifiers: []planmodifier.String{
+					requiresReplaceWhenRemoved("parent_id"),
+				},
 			},
-			"parent_token": schema.StringAttribute{
-				Optional:    true,
-				Description: "Parent folder token for nesting.",
-			},
-			"path": schema.StringAttribute{
+			"report_count": schema.Int64Attribute{
 				Computed:    true,
-				Description: "Full folder path.",
-			},
-			"created_at": schema.StringAttribute{
-				Computed:    true,
-				Description: "Creation timestamp.",
-			},
-			"updated_at": schema.StringAttribute{
-				Computed:    true,
-				Description: "Last update timestamp.",
+				Description: "Number of cost reports in the folder.",
 			},
 		},
 	}
@@ -102,13 +92,6 @@ func (r *FolderResource) Configure(_ context.Context, req resource.ConfigureRequ
 	r.client = client
 }
 
-func (r *FolderResource) getClient(model *FolderResourceModel) *costfluent.Client {
-	if !model.WorkspaceID.IsNull() {
-		return r.client.Workspace(model.WorkspaceID.ValueString())
-	}
-	return r.client
-}
-
 func (r *FolderResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan FolderResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -116,21 +99,11 @@ func (r *FolderResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	client := r.getClient(&plan)
-	input := &costfluent.CreateFolderInput{
-		Name: plan.Name.ValueString(),
-	}
-
-	if !plan.Description.IsNull() {
-		desc := plan.Description.ValueString()
-		input.Description = &desc
-	}
-	if !plan.ParentToken.IsNull() {
-		pt := plan.ParentToken.ValueString()
-		input.ParentToken = &pt
-	}
-
-	folder, err := client.CreateFolder(ctx, input)
+	folder, err := r.client.CreateFolder(ctx, &costfluent.CreateFolderInput{
+		WorkspaceID: plan.WorkspaceID.ValueString(),
+		Title:       plan.Title.ValueString(),
+		ParentID:    plan.ParentID.ValueStringPointer(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create folder", err.Error())
 		return
@@ -147,8 +120,7 @@ func (r *FolderResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	client := r.getClient(&state)
-	folder, err := client.GetFolder(ctx, state.ID.ValueString())
+	folder, err := r.client.GetFolder(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -170,33 +142,15 @@ func (r *FolderResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	client := r.getClient(&state)
-	input := &costfluent.UpdateFolderInput{}
-
-	if !plan.Name.Equal(state.Name) {
-		name := plan.Name.ValueString()
-		input.Name = &name
+	input := &costfluent.UpdateFolderInput{WorkspaceID: state.WorkspaceID.ValueString()}
+	if !plan.Title.Equal(state.Title) {
+		input.Title = plan.Title.ValueStringPointer()
 	}
-	if !plan.Description.Equal(state.Description) {
-		if plan.Description.IsNull() {
-			empty := ""
-			input.Description = &empty
-		} else {
-			desc := plan.Description.ValueString()
-			input.Description = &desc
-		}
-	}
-	if !plan.ParentToken.Equal(state.ParentToken) {
-		if plan.ParentToken.IsNull() {
-			empty := ""
-			input.ParentToken = &empty
-		} else {
-			pt := plan.ParentToken.ValueString()
-			input.ParentToken = &pt
-		}
+	if !plan.ParentID.Equal(state.ParentID) {
+		input.ParentID = plan.ParentID.ValueStringPointer()
 	}
 
-	folder, err := client.UpdateFolder(ctx, state.ID.ValueString(), input)
+	folder, err := r.client.UpdateFolder(ctx, state.ID.ValueString(), input)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update folder", err.Error())
 		return
@@ -213,8 +167,7 @@ func (r *FolderResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	client := r.getClient(&state)
-	err := client.DeleteFolder(ctx, state.ID.ValueString())
+	err := r.client.DeleteFolder(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		return
 	}
@@ -223,29 +176,14 @@ func (r *FolderResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	}
 }
 
+// ImportState takes "<workspace ID>:<ID>", or a bare ID in the provider's workspace.
 func (r *FolderResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importOptionallyWorkspaceScoped(ctx, req, resp)
 }
 
 func mapFolderToModel(f *costfluent.Folder, model *FolderResourceModel) {
-	model.ID = types.StringValue(f.Token)
-	model.Name = types.StringValue(f.Name)
-	model.Path = types.StringValue(f.Path)
-	model.CreatedAt = types.StringValue(f.CreatedAt.Format(time.RFC3339))
-
-	if f.Description != nil {
-		model.Description = types.StringValue(*f.Description)
-	} else {
-		model.Description = types.StringNull()
-	}
-	if f.ParentToken != nil {
-		model.ParentToken = types.StringValue(*f.ParentToken)
-	} else {
-		model.ParentToken = types.StringNull()
-	}
-	if f.UpdatedAt != nil {
-		model.UpdatedAt = types.StringValue(f.UpdatedAt.Format(time.RFC3339))
-	} else {
-		model.UpdatedAt = types.StringNull()
-	}
+	model.ID = types.StringValue(f.ID)
+	model.Title = types.StringValue(f.Title)
+	model.ParentID = types.StringPointerValue(f.ParentID)
+	model.ReportCount = types.Int64Value(int64(f.ReportCount))
 }

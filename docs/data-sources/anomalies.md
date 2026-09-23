@@ -3,30 +3,28 @@
 page_title: "costfluent_anomalies Data Source - Costfluent"
 subcategory: ""
 description: |-
-  List detected cost anomalies.
+  List the organization's detected cost anomalies, newest first.
 ---
 
 # costfluent_anomalies (Data Source)
 
-List detected cost anomalies.
+List the organization's detected cost anomalies, newest first.
 
 ## Example Usage
 
 ```terraform
-# List detected anomalies
-data "costfluent_anomalies" "current" {}
-
-output "anomaly_count" {
-  value = length(data.costfluent_anomalies.current.anomalies)
+# Anomalies nobody has acknowledged yet
+data "costfluent_anomalies" "open" {
+  unacknowledged_only = true
+  limit               = 50
 }
 
-output "critical_anomalies" {
-  value = [for a in data.costfluent_anomalies.current.anomalies : a if a.severity == "critical"]
+output "open_anomaly_count" {
+  value = data.costfluent_anomalies.open.unacknowledged_count
 }
 
-# Use in alerting logic
-output "has_unresolved_anomalies" {
-  value = length([for a in data.costfluent_anomalies.current.anomalies : a if a.status == "new"]) > 0
+output "high_severity" {
+  value = [for a in data.costfluent_anomalies.open.anomalies : a if a.severity == "high"]
 }
 ```
 
@@ -35,11 +33,18 @@ output "has_unresolved_anomalies" {
 
 ### Optional
 
-- `workspace_id` (String) Workspace token. Uses provider default if not specified.
+- `cloud_account_id` (String) Only anomalies in this cloud account.
+- `end_date` (String) Latest anomaly date (YYYY-MM-DD).
+- `limit` (Number) Maximum number of anomalies to return.
+- `severity` (String) Only anomalies of this severity.
+- `start_date` (String) Earliest anomaly date (YYYY-MM-DD).
+- `unacknowledged_only` (Boolean) Only anomalies nobody has acknowledged.
 
 ### Read-Only
 
-- `anomalies` (Attributes List) List of detected anomalies. (see [below for nested schema](#nestedatt--anomalies))
+- `anomalies` (Attributes List) Detected anomalies. (see [below for nested schema](#nestedatt--anomalies))
+- `total_count` (Number) Number of anomalies that match, beyond the limit too.
+- `unacknowledged_count` (Number) Number of matching anomalies not yet acknowledged.
 
 <a id="nestedatt--anomalies"></a>
 ### Nested Schema for `anomalies`
@@ -47,11 +52,15 @@ output "has_unresolved_anomalies" {
 Read-Only:
 
 - `actual_cost` (Number) Actual cost.
+- `anomaly_date` (String) Day the cost departed from what was expected.
+- `anomaly_type` (String) Anomaly type.
+- `currency` (String) Currency of the costs.
 - `detected_at` (String) Detection timestamp.
-- `difference` (Number) Cost difference.
-- `difference_percent` (Number) Difference percentage.
+- `deviation_percent` (Number) Deviation from the expected cost, in percent.
 - `expected_cost` (Number) Expected cost.
-- `id` (String) Anomaly token.
-- `severity` (String) Severity level (low, medium, high, critical).
-- `status` (String) Anomaly status (new, acknowledged, resolved, dismissed).
-- `type` (String) Anomaly type (spike, drop, trend).
+- `id` (String) Anomaly ID.
+- `is_acknowledged` (Boolean) Whether the anomaly was acknowledged.
+- `provider_id` (String) Provider the anomaly was found in.
+- `region` (String) Region, when the anomaly is regional.
+- `service_name` (String) Service whose cost departed.
+- `severity` (String) Severity level.

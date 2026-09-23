@@ -2,14 +2,13 @@ package resources
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -27,15 +26,13 @@ type DashboardResource struct {
 }
 
 type DashboardResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	WorkspaceID types.String `tfsdk:"workspace_id"`
-	Name        types.String `tfsdk:"name"`
-	Description types.String `tfsdk:"description"`
-	FolderToken types.String `tfsdk:"folder_token"`
-	Layout      types.String `tfsdk:"layout"`
-	IsDefault   types.Bool   `tfsdk:"is_default"`
-	CreatedAt   types.String `tfsdk:"created_at"`
-	UpdatedAt   types.String `tfsdk:"updated_at"`
+	ID           types.String `tfsdk:"id"`
+	WorkspaceID  types.String `tfsdk:"workspace_id"`
+	Title        types.String `tfsdk:"title"`
+	IsDefault    types.Bool   `tfsdk:"is_default"`
+	DateInterval types.String `tfsdk:"date_interval"`
+	DateBin      types.String `tfsdk:"date_bin"`
+	CreatedAt    types.String `tfsdk:"created_at"`
 }
 
 func NewDashboardResource() resource.Resource {
@@ -48,50 +45,61 @@ func (r *DashboardResource) Metadata(_ context.Context, req resource.MetadataReq
 
 func (r *DashboardResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Costfluent dashboard.",
+		Description: "Manages a Costfluent dashboard. Widgets are arranged in the app.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
-				Description: "Dashboard token.",
+				Description: "Dashboard ID.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"workspace_id": schema.StringAttribute{
 				Optional:    true,
-				Description: "Workspace token. Uses provider default if not specified.",
+				Description: "Workspace ID. Uses the provider's workspace if not specified.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 				Validators: []validator.String{
 					validators.TokenPrefix("wsp_"),
 				},
 			},
-			"name": schema.StringAttribute{
+			"title": schema.StringAttribute{
 				Required:    true,
-				Description: "Dashboard name.",
-			},
-			"description": schema.StringAttribute{
-				Optional:    true,
-				Description: "Dashboard description.",
-			},
-			"folder_token": schema.StringAttribute{
-				Optional:    true,
-				Description: "Folder token for organization.",
-			},
-			"layout": schema.StringAttribute{
-				Optional:    true,
-				Description: "Dashboard layout configuration (JSON array of widgets).",
+				Description: "Dashboard title.",
 			},
 			"is_default": schema.BoolAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Whether this is the default dashboard.",
+				Description: "Whether this is the workspace's default dashboard. Set at creation; changing it recreates the dashboard.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.RequiresReplace(),
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"date_interval": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Description: "Window the dashboard shows: thisMonth, lastMonth, last7Days, last30Days, last90Days, " +
+					"thisQuarter, lastQuarter, yearToDate, thisYear, lastYear or custom.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"date_bin": schema.StringAttribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "Period each point covers: day, week, month or quarter.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"created_at": schema.StringAttribute{
 				Computed:    true,
 				Description: "Creation timestamp.",
-			},
-			"updated_at": schema.StringAttribute{
-				Computed:    true,
-				Description: "Last update timestamp.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -109,13 +117,6 @@ func (r *DashboardResource) Configure(_ context.Context, req resource.ConfigureR
 	r.client = client
 }
 
-func (r *DashboardResource) getClient(model *DashboardResourceModel) *costfluent.Client {
-	if !model.WorkspaceID.IsNull() {
-		return r.client.Workspace(model.WorkspaceID.ValueString())
-	}
-	return r.client
-}
-
 func (r *DashboardResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan DashboardResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -123,32 +124,13 @@ func (r *DashboardResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	client := r.getClient(&plan)
-	input := &costfluent.CreateDashboardInput{
-		Name: plan.Name.ValueString(),
-	}
-
-	if !plan.Description.IsNull() {
-		desc := plan.Description.ValueString()
-		input.Description = &desc
-	}
-	if !plan.FolderToken.IsNull() {
-		ft := plan.FolderToken.ValueString()
-		input.FolderToken = &ft
-	}
-	if !plan.Layout.IsNull() {
-		var widgets []costfluent.Widget
-		if err := json.Unmarshal([]byte(plan.Layout.ValueString()), &widgets); err != nil {
-			resp.Diagnostics.AddError("Invalid layout JSON", err.Error())
-			return
-		}
-		input.Layout = widgets
-	}
-	if !plan.IsDefault.IsNull() {
-		input.IsDefault = plan.IsDefault.ValueBool()
-	}
-
-	dashboard, err := client.CreateDashboard(ctx, input)
+	dashboard, err := r.client.CreateDashboard(ctx, &costfluent.CreateDashboardInput{
+		WorkspaceID:  plan.WorkspaceID.ValueString(),
+		Title:        plan.Title.ValueString(),
+		IsDefault:    plan.IsDefault.ValueBool(),
+		DateInterval: knownString(plan.DateInterval),
+		DateBin:      knownString(plan.DateBin),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create dashboard", err.Error())
 		return
@@ -165,8 +147,7 @@ func (r *DashboardResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	client := r.getClient(&state)
-	dashboard, err := client.GetDashboard(ctx, state.ID.ValueString())
+	dashboard, err := r.client.GetDashboard(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -188,47 +169,18 @@ func (r *DashboardResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	client := r.getClient(&state)
 	input := &costfluent.UpdateDashboardInput{}
-
-	if !plan.Name.Equal(state.Name) {
-		name := plan.Name.ValueString()
-		input.Name = &name
+	if !plan.Title.Equal(state.Title) {
+		input.Title = plan.Title.ValueStringPointer()
 	}
-	if !plan.Description.Equal(state.Description) {
-		if plan.Description.IsNull() {
-			empty := ""
-			input.Description = &empty
-		} else {
-			desc := plan.Description.ValueString()
-			input.Description = &desc
-		}
+	if !plan.DateInterval.Equal(state.DateInterval) {
+		input.DateInterval = knownString(plan.DateInterval)
 	}
-	if !plan.FolderToken.Equal(state.FolderToken) {
-		if plan.FolderToken.IsNull() {
-			empty := ""
-			input.FolderToken = &empty
-		} else {
-			ft := plan.FolderToken.ValueString()
-			input.FolderToken = &ft
-		}
-	}
-	if !plan.Layout.Equal(state.Layout) {
-		if !plan.Layout.IsNull() {
-			var widgets []costfluent.Widget
-			if err := json.Unmarshal([]byte(plan.Layout.ValueString()), &widgets); err != nil {
-				resp.Diagnostics.AddError("Invalid layout JSON", err.Error())
-				return
-			}
-			input.Layout = widgets
-		}
-	}
-	if !plan.IsDefault.Equal(state.IsDefault) {
-		isDefault := plan.IsDefault.ValueBool()
-		input.IsDefault = &isDefault
+	if !plan.DateBin.Equal(state.DateBin) {
+		input.DateBin = knownString(plan.DateBin)
 	}
 
-	dashboard, err := client.UpdateDashboard(ctx, state.ID.ValueString(), input)
+	dashboard, err := r.client.UpdateDashboard(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString(), input)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update dashboard", err.Error())
 		return
@@ -245,8 +197,7 @@ func (r *DashboardResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	client := r.getClient(&state)
-	err := client.DeleteDashboard(ctx, state.ID.ValueString())
+	err := r.client.DeleteDashboard(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		return
 	}
@@ -255,35 +206,16 @@ func (r *DashboardResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 }
 
+// ImportState takes "<workspace ID>:<ID>", or a bare ID in the provider's workspace.
 func (r *DashboardResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importOptionallyWorkspaceScoped(ctx, req, resp)
 }
 
 func mapDashboardToModel(d *costfluent.Dashboard, model *DashboardResourceModel) {
-	model.ID = types.StringValue(d.Token)
-	model.Name = types.StringValue(d.Name)
+	model.ID = types.StringValue(d.ID)
+	model.Title = types.StringValue(d.Title)
 	model.IsDefault = types.BoolValue(d.IsDefault)
+	model.DateInterval = sameEnum(model.DateInterval, d.DateInterval)
+	model.DateBin = sameEnum(model.DateBin, d.DateBin)
 	model.CreatedAt = types.StringValue(d.CreatedAt.Format(time.RFC3339))
-
-	if d.Description != nil {
-		model.Description = types.StringValue(*d.Description)
-	} else {
-		model.Description = types.StringNull()
-	}
-	if d.FolderToken != nil {
-		model.FolderToken = types.StringValue(*d.FolderToken)
-	} else {
-		model.FolderToken = types.StringNull()
-	}
-	if len(d.Layout) > 0 {
-		layoutJSON, _ := json.Marshal(d.Layout)
-		model.Layout = types.StringValue(string(layoutJSON))
-	} else {
-		model.Layout = types.StringNull()
-	}
-	if d.UpdatedAt != nil {
-		model.UpdatedAt = types.StringValue(d.UpdatedAt.Format(time.RFC3339))
-	} else {
-		model.UpdatedAt = types.StringNull()
-	}
 }

@@ -47,7 +47,7 @@ func (d *ProviderDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 			"id": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Provider token. Either id or name must be specified.",
+				Description: "Provider ID. Either id or name must be specified.",
 			},
 			"name": schema.StringAttribute{
 				Optional:    true,
@@ -145,7 +145,7 @@ func (d *ProviderDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
-	config.ID = types.StringValue(provider.Token)
+	config.ID = types.StringValue(provider.ID)
 	config.Key = types.StringValue(provider.Key)
 	config.Name = types.StringValue(provider.Name)
 	config.Status = types.StringValue(provider.Status)

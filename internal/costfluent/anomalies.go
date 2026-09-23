@@ -2,149 +2,88 @@ package costfluent
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 )
 
-// Anomaly represents a detected cost anomaly
+// Anomaly is a day on which a provider's cost for one service departed from what was expected
 type Anomaly struct {
-	Token             string           `json:"token"`
-	WorkspaceToken    string           `json:"workspace_token"`
-	Type              string           `json:"type"`     // spike, drop, trend
-	Severity          string           `json:"severity"` // low, medium, high, critical
-	Status            string           `json:"status"`   // new, acknowledged, resolved, dismissed
-	DetectedAt        time.Time        `json:"detected_at"`
-	ResolvedAt        *time.Time       `json:"resolved_at,omitempty"`
-	ExpectedCost      float64          `json:"expected_cost"`
-	ActualCost        float64          `json:"actual_cost"`
-	Difference        float64          `json:"difference"`
-	DifferencePercent float64          `json:"difference_percent"`
-	Resource          *AnomalyResource `json:"resource,omitempty"`
-	RootCause         *string          `json:"root_cause,omitempty"`
-	AcknowledgedBy    *string          `json:"acknowledged_by,omitempty"`
-	AcknowledgedAt    *time.Time       `json:"acknowledged_at,omitempty"`
+	ID               string     `json:"id"`
+	ProviderID       string     `json:"providerId"`
+	AnomalyDate      string     `json:"anomalyDate"`
+	ServiceName      string     `json:"serviceName"`
+	Region           *string    `json:"region,omitempty"`
+	AnomalyType      string     `json:"anomalyType"`
+	Severity         string     `json:"severity"`
+	ExpectedCost     float64    `json:"expectedCost"`
+	ActualCost       float64    `json:"actualCost"`
+	DeviationPercent float64    `json:"deviationPercent"`
+	Description      *string    `json:"description,omitempty"`
+	Currency         string     `json:"currency"`
+	IsAcknowledged   bool       `json:"isAcknowledged"`
+	AcknowledgedAt   *time.Time `json:"acknowledgedAt,omitempty"`
+	DetectedAt       time.Time  `json:"detectedAt"`
 }
 
-// AnomalyResource contains resource information for an anomaly
-type AnomalyResource struct {
-	ProviderToken string `json:"provider_token,omitempty"`
-	Service       string `json:"service,omitempty"`
-	Region        string `json:"region,omitempty"`
-	ResourceID    string `json:"resource_id,omitempty"`
+// AnomalyList is the most recent anomalies that match, with the counts across all of them
+type AnomalyList struct {
+	Data                []Anomaly `json:"data"`
+	TotalCount          int       `json:"totalCount"`
+	UnacknowledgedCount int       `json:"unacknowledgedCount"`
 }
 
-// AnomaliesListResponse is the response for listing anomalies
-type AnomaliesListResponse = ListResponse[Anomaly]
-
-// ListAnomaliesOptions for filtering anomalies
+// ListAnomaliesOptions narrows an anomaly listing. Dates are calendar days, YYYY-MM-DD.
 type ListAnomaliesOptions struct {
-	PageOptions
-	Status   *string `url:"status,omitempty"`
-	Severity *string `url:"severity,omitempty"`
-	From     *string `url:"from,omitempty"`
-	To       *string `url:"to,omitempty"`
+	CloudAccountID     string
+	Severity           string
+	UnacknowledgedOnly bool
+	StartDate          string
+	EndDate            string
+	Limit              int
 }
 
-// ListAnomalies returns paginated anomalies
-func (c *Client) ListAnomalies(ctx context.Context, opts *ListAnomaliesOptions) (*AnomaliesListResponse, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/anomalies", nil)
+// ListAnomalies returns detected anomalies, newest first
+func (c *Client) ListAnomalies(ctx context.Context, opts *ListAnomaliesOptions) (*AnomalyList, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/anomalies", nil)
 	if err != nil {
 		return nil, err
 	}
 
 	if opts != nil {
 		q := req.URL.Query()
-		if opts.Page > 0 {
-			q.Set("page", fmt.Sprint(opts.Page))
+		setIf(q, "cloudAccountId", opts.CloudAccountID)
+		setIf(q, "severity", opts.Severity)
+		if opts.UnacknowledgedOnly {
+			q.Set("unacknowledgedOnly", "true")
 		}
+		setIf(q, "startDate", opts.StartDate)
+		setIf(q, "endDate", opts.EndDate)
 		if opts.Limit > 0 {
-			q.Set("limit", fmt.Sprint(opts.Limit))
-		}
-		if opts.Status != nil {
-			q.Set("status", *opts.Status)
-		}
-		if opts.Severity != nil {
-			q.Set("severity", *opts.Severity)
-		}
-		if opts.From != nil {
-			q.Set("from", *opts.From)
-		}
-		if opts.To != nil {
-			q.Set("to", *opts.To)
+			q.Set("limit", strconv.Itoa(opts.Limit))
 		}
 		req.URL.RawQuery = q.Encode()
 	}
 
-	var resp AnomaliesListResponse
+	var resp AnomalyList
 	if err := c.do(req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
-// ListAllAnomalies fetches all anomalies across all pages
-func (c *Client) ListAllAnomalies(ctx context.Context, pageSize int) ([]Anomaly, error) {
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-
-	var all []Anomaly
-	page := 1
-	for {
-		resp, err := c.ListAnomalies(ctx, &ListAnomaliesOptions{
-			PageOptions: PageOptions{Page: page, Limit: pageSize},
-		})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, resp.Data...)
-		if !resp.Links.HasNextPage() || len(resp.Data) == 0 {
-			break
-		}
-		page++
-	}
-	return all, nil
-}
-
-// GetAnomaly returns a single anomaly by token
-func (c *Client) GetAnomaly(ctx context.Context, token string) (*Anomaly, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/anomalies/"+token, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var anomaly Anomaly
-	if err := c.do(req, &anomaly); err != nil {
-		return nil, err
-	}
-	return &anomaly, nil
-}
-
-// AcknowledgeAnomalyInput for acknowledging an anomaly
-type AcknowledgeAnomalyInput struct {
-	RootCause *string `json:"root_cause,omitempty"`
-}
-
 // AcknowledgeAnomaly marks an anomaly as acknowledged
-func (c *Client) AcknowledgeAnomaly(ctx context.Context, token string, input *AcknowledgeAnomalyInput) (*Anomaly, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/anomalies/"+token+"/acknowledge", input)
-	if err != nil {
-		return nil, err
-	}
-
-	var anomaly Anomaly
-	if err := c.do(req, &anomaly); err != nil {
-		return nil, err
-	}
-	return &anomaly, nil
-}
-
-// DismissAnomaly dismisses an anomaly
-func (c *Client) DismissAnomaly(ctx context.Context, token string) error {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/anomalies/"+token+"/dismiss", nil)
+func (c *Client) AcknowledgeAnomaly(ctx context.Context, id string) error {
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/anomalies/"+url.PathEscape(id)+"/acknowledge", nil)
 	if err != nil {
 		return err
 	}
 	return c.do(req, nil)
+}
+
+func setIf(q url.Values, key, value string) {
+	if value != "" {
+		q.Set(key, value)
+	}
 }

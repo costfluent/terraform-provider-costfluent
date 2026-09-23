@@ -19,13 +19,14 @@ type WorkspaceDataSource struct {
 }
 
 type WorkspaceDataSourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Description types.String `tfsdk:"description"`
-	Currency    types.String `tfsdk:"currency"`
-	Timezone    types.String `tfsdk:"timezone"`
-	CreatedAt   types.String `tfsdk:"created_at"`
-	UpdatedAt   types.String `tfsdk:"updated_at"`
+	ID       types.String `tfsdk:"id"`
+	Name     types.String `tfsdk:"name"`
+	Currency types.String `tfsdk:"currency"`
+
+	EnableAutomaticSyncing types.Bool `tfsdk:"enable_automatic_syncing"`
+
+	CreatedAt types.String `tfsdk:"created_at"`
+	UpdatedAt types.String `tfsdk:"updated_at"`
 }
 
 func NewWorkspaceDataSource() datasource.DataSource {
@@ -43,24 +44,20 @@ func (d *WorkspaceDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 			"id": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Workspace token. Either id or name must be specified.",
+				Description: "Workspace ID. Either id or name must be specified.",
 			},
 			"name": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
 				Description: "Workspace name. Either id or name must be specified.",
 			},
-			"description": schema.StringAttribute{
-				Computed:    true,
-				Description: "Workspace description.",
-			},
 			"currency": schema.StringAttribute{
 				Computed:    true,
 				Description: "Default currency.",
 			},
-			"timezone": schema.StringAttribute{
+			"enable_automatic_syncing": schema.BoolAttribute{
 				Computed:    true,
-				Description: "Default timezone.",
+				Description: "Whether Costfluent collects from this workspace's data sources on its own schedule.",
 			},
 			"created_at": schema.StringAttribute{
 				Computed:    true,
@@ -126,17 +123,12 @@ func (d *WorkspaceDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 
-	config.ID = types.StringValue(workspace.Token)
+	config.ID = types.StringValue(workspace.ID)
 	config.Name = types.StringValue(workspace.Name)
 	config.Currency = types.StringValue(workspace.Currency)
-	config.Timezone = types.StringValue(workspace.Timezone)
+	config.EnableAutomaticSyncing = types.BoolValue(workspace.EnableAutomaticSyncing)
 	config.CreatedAt = types.StringValue(workspace.CreatedAt.Format(time.RFC3339))
 
-	if workspace.Description != nil {
-		config.Description = types.StringValue(*workspace.Description)
-	} else {
-		config.Description = types.StringNull()
-	}
 	if workspace.UpdatedAt != nil {
 		config.UpdatedAt = types.StringValue(workspace.UpdatedAt.Format(time.RFC3339))
 	} else {

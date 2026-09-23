@@ -52,7 +52,7 @@ func (d *ProvidersDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 					Attributes: map[string]schema.Attribute{
 						"id": schema.StringAttribute{
 							Computed:    true,
-							Description: "Provider token.",
+							Description: "Provider ID.",
 						},
 						"key": schema.StringAttribute{
 							Computed:    true,
@@ -117,7 +117,7 @@ func (d *ProvidersDataSource) Read(ctx context.Context, req datasource.ReadReque
 
 	for i, p := range providers {
 		state.Providers[i] = ProviderModel{
-			ID:                   types.StringValue(p.Token),
+			ID:                   types.StringValue(p.ID),
 			Key:                  types.StringValue(p.Key),
 			Name:                 types.StringValue(p.Name),
 			Status:               types.StringValue(p.Status),

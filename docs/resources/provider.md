@@ -26,14 +26,17 @@ variable "azure_client_secret" {
   sensitive = true
 }
 
+# The role must trust data.costfluent_aws_provider_info's principal_arn with its external_id;
+# Costfluent adds the external ID itself, so the credentials carry only the role.
 resource "costfluent_provider" "aws_main" {
   key  = "aws"
   name = "AWS Production"
   credentials = {
-    role_arn = "arn:aws:iam::123456789012:role/CostfluentRole"
+    role_arn = "arn:aws:iam::123456789012:role/CostfluentBillingRole"
   }
   settings = {
-    regions = "us-east-1,us-west-2"
+    export_bucket        = "acme-costfluent-export"
+    export_bucket_region = "us-east-1"
   }
 }
 
@@ -41,9 +44,9 @@ resource "costfluent_provider" "azure" {
   key  = "azure"
   name = "Azure Production"
   credentials = {
-    tenant_id     = var.azure_tenant_id
-    client_id     = var.azure_client_id
-    client_secret = var.azure_client_secret
+    tenant   = var.azure_tenant_id
+    appId    = var.azure_client_id
+    password = var.azure_client_secret
   }
 }
 ```
@@ -53,22 +56,22 @@ resource "costfluent_provider" "azure" {
 
 ### Required
 
-- `credentials` (Map of String, Sensitive) Provider credentials (e.g., role_arn for AWS, client_id/client_secret for Azure).
+- `credentials` (Map of String, Sensitive) Provider credentials: role_arn for AWS; tenant, appId and password for Azure; billing_account_id, project_id and bigquery_dataset for GCP.
 - `key` (String) Provider type key (e.g., aws, azure, gcp, datadog).
-- `name` (String) Display name for the provider.
+- `name` (String) Display name for the provider. Fixed once connected; changing it recreates the provider.
 
 ### Optional
 
 - `description` (String) Provider description.
-- `parent_provider_token` (String) Parent provider token for linked accounts.
-- `settings` (Map of String) Provider-specific settings.
+- `external_id` (String) The account identity the provider verified when connecting: the AWS account, the Azure tenant or the GCP billing account. Not the AWS assume-role external ID, which Costfluent issues and adds itself.
+- `parent_provider_id` (String) Parent provider ID for linked accounts. Changing it recreates the provider.
+- `settings` (Map of String) Provider-specific settings, such as export_bucket, export_bucket_region, export_prefix and export_name for an AWS FOCUS export.
 - `sync_frequency_minutes` (Number) Sync frequency in minutes. Defaults to 360 (6 hours).
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
-- `external_id` (String) External ID for cross-account access.
-- `id` (String) Provider token.
+- `id` (String) Provider ID.
 - `last_sync_at` (String) Last successful sync timestamp.
 - `last_sync_status` (String) Last sync status.
 - `next_sync_at` (String) Next scheduled sync timestamp.

@@ -3,34 +3,27 @@
 page_title: "costfluent_saved_filter Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent saved filter.
+  Manages a Costfluent saved filter: a named cost filter expression.
 ---
 
 # costfluent_saved_filter (Resource)
 
-Manages a Costfluent saved filter.
+Manages a Costfluent saved filter: a named cost filter expression.
 
 ## Example Usage
 
 ```terraform
 # Production environment filter
 resource "costfluent_saved_filter" "production" {
-  name        = "Production Only"
-  description = "Filter for production environment resources"
-
-  filters = {
-    "tag:Environment" = "production"
-  }
+  title  = "Production Only"
+  filter = "tag:Environment = 'production'"
 }
 
-# AWS compute filter
+# AWS compute filter, the workspace's default
 resource "costfluent_saved_filter" "aws_compute" {
-  name = "AWS Compute"
-
-  filters = {
-    "provider" = "aws"
-    "service"  = "Amazon EC2"
-  }
+  title      = "AWS Compute"
+  filter     = "provider = 'aws' AND service = 'Amazon EC2'"
+  is_default = true
 }
 ```
 
@@ -39,17 +32,15 @@ resource "costfluent_saved_filter" "aws_compute" {
 
 ### Required
 
-- `filters` (Map of String) Filter criteria as key-value pairs.
-- `name` (String) Filter name.
+- `filter` (String) Cost filter expression.
+- `title` (String) Filter title.
 
 ### Optional
 
-- `description` (String) Filter description.
-- `is_default` (Boolean) Whether this is the default filter.
-- `workspace_id` (String) Workspace token. Uses provider default if not specified.
+- `is_default` (Boolean) Whether this is the workspace's default filter.
+- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
-- `id` (String) Saved filter token.
-- `updated_at` (String) Last update timestamp.
+- `id` (String) Saved filter ID.

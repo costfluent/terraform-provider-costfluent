@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -17,4 +18,15 @@ func testAccPreCheck(t *testing.T) {
 	if v := os.Getenv("COSTFLUENT_API_KEY"); v == "" {
 		t.Fatal("COSTFLUENT_API_KEY must be set for acceptance tests")
 	}
+}
+
+// testAccWorkspaceFixture is a workspace of the test's own, so a workspace-scoped resource needs no
+// COSTFLUENT_WORKSPACE and leaves nothing behind in a shared one.
+func testAccWorkspaceFixture(name string) string {
+	return fmt.Sprintf(`
+resource "costfluent_workspace" "fixture" {
+  name     = %q
+  currency = "EUR"
+}
+`, name+"-ws")
 }

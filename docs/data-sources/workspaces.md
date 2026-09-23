@@ -43,8 +43,6 @@ Read-Only:
 
 - `created_at` (String) Creation timestamp.
 - `currency` (String) Default currency.
-- `description` (String) Workspace description.
-- `id` (String) Workspace token.
+- `id` (String) Workspace ID.
 - `name` (String) Workspace name.
-- `timezone` (String) Default timezone.
 - `updated_at` (String) Last update timestamp.

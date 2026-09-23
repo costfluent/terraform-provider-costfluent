@@ -17,14 +17,16 @@ type CostSummaryDataSource struct {
 }
 
 type CostSummaryDataSourceModel struct {
-	WorkspaceID   types.String  `tfsdk:"workspace_id"`
-	Period        types.String  `tfsdk:"period"`
-	TotalCost     types.Float64 `tfsdk:"total_cost"`
-	Currency      types.String  `tfsdk:"currency"`
-	PreviousCost  types.Float64 `tfsdk:"previous_cost"`
-	Change        types.Float64 `tfsdk:"change"`
-	ChangePercent types.Float64 `tfsdk:"change_percent"`
-	Forecast      types.Float64 `tfsdk:"forecast"`
+	WorkspaceID        types.String  `tfsdk:"workspace_id"`
+	StartDate          types.String  `tfsdk:"start_date"`
+	EndDate            types.String  `tfsdk:"end_date"`
+	Filter             types.String  `tfsdk:"filter"`
+	TotalCost          types.Float64 `tfsdk:"total_cost"`
+	TotalListCost      types.Float64 `tfsdk:"total_list_cost"`
+	TotalAmortizedCost types.Float64 `tfsdk:"total_amortized_cost"`
+	Currency           types.String  `tfsdk:"currency"`
+	CostChange         types.Float64 `tfsdk:"cost_change"`
+	CostChangePercent  types.Float64 `tfsdk:"cost_change_percent"`
 }
 
 func NewCostSummaryDataSource() datasource.DataSource {
@@ -37,39 +39,47 @@ func (d *CostSummaryDataSource) Metadata(_ context.Context, req datasource.Metad
 
 func (d *CostSummaryDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Get cost summary for a workspace. This query may be slow.",
+		Description: "Summarize cost over a window, with its change against the window before. This query may be slow.",
 		Attributes: map[string]schema.Attribute{
 			"workspace_id": schema.StringAttribute{
 				Optional:    true,
-				Description: "Workspace token. Uses provider default if not specified.",
+				Description: "Workspace ID. Uses the provider's workspace if not specified, and the whole organization when neither is set.",
 			},
-			"period": schema.StringAttribute{
+			"start_date": schema.StringAttribute{
+				Required:    true,
+				Description: "First day of the window (YYYY-MM-DD).",
+			},
+			"end_date": schema.StringAttribute{
+				Required:    true,
+				Description: "Last day of the window (YYYY-MM-DD).",
+			},
+			"filter": schema.StringAttribute{
 				Optional:    true,
-				Description: "Period preset (e.g., this_month, last_30_days). Defaults to this_month.",
+				Description: "Cost filter expression.",
 			},
 			"total_cost": schema.Float64Attribute{
 				Computed:    true,
-				Description: "Total cost for the period.",
+				Description: "Total cost for the window.",
+			},
+			"total_list_cost": schema.Float64Attribute{
+				Computed:    true,
+				Description: "Total cost at list prices.",
+			},
+			"total_amortized_cost": schema.Float64Attribute{
+				Computed:    true,
+				Description: "Total amortized cost.",
 			},
 			"currency": schema.StringAttribute{
 				Computed:    true,
 				Description: "Currency code.",
 			},
-			"previous_cost": schema.Float64Attribute{
+			"cost_change": schema.Float64Attribute{
 				Computed:    true,
-				Description: "Cost for the previous comparable period.",
+				Description: "Absolute change against the previous window of the same length.",
 			},
-			"change": schema.Float64Attribute{
+			"cost_change_percent": schema.Float64Attribute{
 				Computed:    true,
-				Description: "Absolute cost change from previous period.",
-			},
-			"change_percent": schema.Float64Attribute{
-				Computed:    true,
-				Description: "Percentage change from previous period.",
-			},
-			"forecast": schema.Float64Attribute{
-				Computed:    true,
-				Description: "Forecasted cost for the full period.",
+				Description: "Percentage change against the previous window of the same length.",
 			},
 		},
 	}
@@ -94,28 +104,23 @@ func (d *CostSummaryDataSource) Read(ctx context.Context, req datasource.ReadReq
 		return
 	}
 
-	client := d.client
-	if !config.WorkspaceID.IsNull() {
-		client = client.Workspace(config.WorkspaceID.ValueString())
-	}
-
-	period := "this_month"
-	if !config.Period.IsNull() {
-		period = config.Period.ValueString()
-	}
-
-	summary, err := client.GetCostSummary(ctx, period)
+	summary, err := d.client.GetCostSummary(ctx, &costfluent.CostFilterOptions{
+		StartDate:   config.StartDate.ValueString(),
+		EndDate:     config.EndDate.ValueString(),
+		WorkspaceID: config.WorkspaceID.ValueString(),
+		Filter:      config.Filter.ValueString(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to get cost summary", err.Error())
 		return
 	}
 
 	config.TotalCost = types.Float64Value(summary.TotalCost)
+	config.TotalListCost = types.Float64Value(summary.TotalListCost)
+	config.TotalAmortizedCost = types.Float64Value(summary.TotalAmortizedCost)
 	config.Currency = types.StringValue(summary.Currency)
-	config.PreviousCost = types.Float64Value(summary.PreviousCost)
-	config.Change = types.Float64Value(summary.Change)
-	config.ChangePercent = types.Float64Value(summary.ChangePercent)
-	config.Forecast = types.Float64Value(summary.Forecast)
+	config.CostChange = types.Float64Value(summary.CostChange)
+	config.CostChangePercent = types.Float64Value(summary.CostChangePercent)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }

@@ -44,7 +44,7 @@ Read-Only:
 
 - `created_at` (String) Creation timestamp.
 - `description` (String) Provider description.
-- `id` (String) Provider token.
+- `id` (String) Provider ID.
 - `key` (String) Provider type key.
 - `last_sync_at` (String) Last sync timestamp.
 - `last_sync_status` (String) Last sync status.

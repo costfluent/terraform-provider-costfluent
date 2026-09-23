@@ -3,16 +3,12 @@ data "costfluent_provider" "aws_main" {
   name = "Production AWS"
 }
 
-# Scope a budget to that one connection.
-resource "costfluent_budget" "aws_only" {
-  name       = "AWS Budget"
-  amount     = 10000
-  period     = "monthly"
-  start_date = "2026-01-01"
-
-  filters = {
-    provider_tokens = [data.costfluent_provider.aws_main.id]
-  }
+# Alert on that one connection's cost.
+resource "costfluent_cost_alert" "aws_only" {
+  name            = "AWS daily spend"
+  threshold_type  = "absolute"
+  threshold_value = 500
+  provider_ids    = [data.costfluent_provider.aws_main.id]
 }
 
 output "provider_status" {

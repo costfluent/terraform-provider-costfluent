@@ -14,16 +14,17 @@ Manages a Costfluent workspace.
 
 ```terraform
 resource "costfluent_workspace" "production" {
-  name        = "Production"
-  description = "Production environment cost tracking"
-  currency    = "USD"
-  timezone    = "America/New_York"
+  name     = "Production"
+  currency = "EUR"
 }
 
-resource "costfluent_workspace" "staging" {
-  name     = "Staging"
-  currency = "USD"
-  timezone = "UTC"
+# Costs billed in other currencies are converted into GBP at each month's average rate.
+resource "costfluent_workspace" "uk" {
+  name                       = "UK"
+  currency                   = "GBP"
+  enable_currency_conversion = true
+  conversion_currency        = "GBP"
+  conversion_method          = "monthlyAverage"
 }
 ```
 
@@ -36,12 +37,15 @@ resource "costfluent_workspace" "staging" {
 
 ### Optional
 
-- `currency` (String) Default currency (ISO 4217).
-- `description` (String) Workspace description.
-- `timezone` (String) Default timezone (IANA).
+- `conversion_currency` (String) The currency costs are converted into while conversion is enabled (ISO 4217).
+- `conversion_method` (String) Exchange rate dates: monthlyAverage (the mean of the month's daily rates), monthEndRate (the month's last rate) or transactionDate (each charge's own day).
+- `currency` (String) Display preference (ISO 4217): the currency costs default to where no billing currency applies. Changeable only while enable_currency_conversion is false, because the conversion selection overrides it.
+- `enable_automatic_syncing` (Boolean) Collect from this workspace's data sources on Costfluent's own schedule. When false, the recurring collection is skipped for every source no other workspace still syncs; stored cost data and an explicitly requested sync are unaffected.
+- `enable_currency_conversion` (Boolean) Convert every cost into conversion_currency using European Central Bank reference rates. When false, costs stay in the currency they were billed in.
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
-- `id` (String) Workspace token (wsp_xxx).
+- `id` (String) Workspace ID (wsp_xxx).
+- `provider_count` (Number) Number of providers connected to the workspace.
 - `updated_at` (String) Last update timestamp.

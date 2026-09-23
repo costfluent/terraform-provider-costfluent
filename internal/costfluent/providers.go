@@ -2,28 +2,36 @@ package costfluent
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
 // Provider represents a cloud provider connection
 type Provider struct {
-	Token                string     `json:"token"`
+	ID                   string     `json:"id"`
 	Type                 string     `json:"type"`
 	Key                  string     `json:"key"`
 	Name                 string     `json:"name"`
 	Description          *string    `json:"description,omitempty"`
 	Status               string     `json:"status"`
-	ParentProviderToken  *string    `json:"parent_provider_token,omitempty"`
-	ExternalID           *string    `json:"external_id,omitempty"`
-	LastSyncAt           *time.Time `json:"last_sync_at,omitempty"`
-	LastSyncStatus       *string    `json:"last_sync_status,omitempty"`
-	LastSyncError        *string    `json:"last_sync_error,omitempty"`
-	NextSyncAt           *time.Time `json:"next_sync_at,omitempty"`
-	SyncFrequencyMinutes int        `json:"sync_frequency_minutes"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            *time.Time `json:"updated_at,omitempty"`
+	ParentProviderID     *string    `json:"parentProviderId,omitempty"`
+	ExternalID           *string    `json:"externalId,omitempty"`
+	LastSyncAt           *time.Time `json:"lastSyncAt,omitempty"`
+	LastSyncStatus       *string    `json:"lastSyncStatus,omitempty"`
+	LastSyncError        *string    `json:"lastSyncError,omitempty"`
+	NextSyncAt           *time.Time `json:"nextSyncAt,omitempty"`
+	SyncFrequencyMinutes int        `json:"syncFrequencyMinutes"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	UpdatedAt            *time.Time `json:"updatedAt,omitempty"`
+}
+
+// ProviderCreated is what connecting a provider returns; read the full Provider with GetProvider.
+type ProviderCreated struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
 }
 
 // ProvidersListResponse is the response for listing providers
@@ -31,21 +39,12 @@ type ProvidersListResponse = ListResponse[Provider]
 
 // ListProviders returns paginated providers
 func (c *Client) ListProviders(ctx context.Context, opts *PageOptions) (*ProvidersListResponse, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/providers", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/providers", nil)
 	if err != nil {
 		return nil, err
 	}
 
-	if opts != nil {
-		q := req.URL.Query()
-		if opts.Page > 0 {
-			q.Set("page", fmt.Sprint(opts.Page))
-		}
-		if opts.Limit > 0 {
-			q.Set("limit", fmt.Sprint(opts.Limit))
-		}
-		req.URL.RawQuery = q.Encode()
-	}
+	opts.apply(req)
 
 	var resp ProvidersListResponse
 	if err := c.do(req, &resp); err != nil {
@@ -56,29 +55,14 @@ func (c *Client) ListProviders(ctx context.Context, opts *PageOptions) (*Provide
 
 // ListAllProviders fetches all providers across all pages
 func (c *Client) ListAllProviders(ctx context.Context, pageSize int) ([]Provider, error) {
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-
-	var all []Provider
-	page := 1
-	for {
-		resp, err := c.ListProviders(ctx, &PageOptions{Page: page, Limit: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, resp.Data...)
-		if !resp.Links.HasNextPage() || len(resp.Data) == 0 {
-			break
-		}
-		page++
-	}
-	return all, nil
+	return listAll(pageSize, func(p *PageOptions) (*ListResponse[Provider], error) {
+		return c.ListProviders(ctx, p)
+	})
 }
 
-// GetProvider returns a single provider by token
-func (c *Client) GetProvider(ctx context.Context, token string) (*Provider, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/providers/"+token, nil)
+// GetProvider returns a single provider by ID
+func (c *Client) GetProvider(ctx context.Context, id string) (*Provider, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/providers/"+url.PathEscape(id), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -90,40 +74,91 @@ func (c *Client) GetProvider(ctx context.Context, token string) (*Provider, erro
 	return &provider, nil
 }
 
-// CreateProviderInput for creating a new provider
+// CreateProviderInput for connecting a new provider
 type CreateProviderInput struct {
-	Key         string            `json:"key"`
-	Name        string            `json:"name"`
-	Description *string           `json:"description,omitempty"`
-	Credentials map[string]string `json:"credentials"`
-	Settings    map[string]any    `json:"settings,omitempty"`
+	Key                  string            `json:"key"`
+	Name                 string            `json:"name,omitempty"`
+	Description          *string           `json:"description,omitempty"`
+	ParentProviderID     *string           `json:"parentProviderId,omitempty"`
+	ExternalID           *string           `json:"externalId,omitempty"`
+	Credentials          map[string]string `json:"credentials"`
+	Settings             map[string]string `json:"settings,omitempty"`
+	SyncFrequencyMinutes *int              `json:"syncFrequencyMinutes,omitempty"`
 }
 
-// CreateProvider creates a new provider
-func (c *Client) CreateProvider(ctx context.Context, input *CreateProviderInput) (*Provider, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/providers", input)
+// CreateProvider connects a new provider
+func (c *Client) CreateProvider(ctx context.Context, input *CreateProviderInput) (*ProviderCreated, error) {
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/providers", input)
 	if err != nil {
 		return nil, err
 	}
 
-	var provider Provider
-	if err := c.do(req, &provider); err != nil {
+	var created ProviderCreated
+	if err := c.do(req, &created); err != nil {
 		return nil, err
 	}
-	return &provider, nil
+	return &created, nil
 }
 
-// UpdateProviderInput for updating a provider
+// GcpServiceAccount is the service account an organization grants BigQuery Data Viewer on its GCP
+// billing export dataset to. OrganizationID and DirectoryCustomerID are Costfluent's own, for
+// customers whose domain-restricted sharing policy must allow them.
+type GcpServiceAccount struct {
+	ServiceAccountEmail string  `json:"serviceAccountEmail"`
+	OrganizationID      *string `json:"organizationId,omitempty"`
+	DirectoryCustomerID *string `json:"directoryCustomerId,omitempty"`
+}
+
+// ProvisionGcpServiceAccount returns the organization's GCP service account, creating it on the
+// first call. Repeating it returns the same account.
+func (c *Client) ProvisionGcpServiceAccount(ctx context.Context) (*GcpServiceAccount, error) {
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/providers/gcp/service-account", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var account GcpServiceAccount
+	if err := c.do(req, &account); err != nil {
+		return nil, err
+	}
+	return &account, nil
+}
+
+// AwsConnector is what an organization's AWS IAM role must trust before it is connected: the
+// Costfluent principal and the organization's external ID. Both are stable for the organization.
+type AwsConnector struct {
+	PrincipalArn string  `json:"principalArn"`
+	ExternalID   string  `json:"externalId"`
+	TemplateURL  *string `json:"templateUrl,omitempty"`
+	Region       string  `json:"region"`
+}
+
+// GetAwsConnector returns the principal and external ID an AWS role must trust. A pure read.
+func (c *Client) GetAwsConnector(ctx context.Context) (*AwsConnector, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/providers/aws/connector", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var connector AwsConnector
+	if err := c.do(req, &connector); err != nil {
+		return nil, err
+	}
+	return &connector, nil
+}
+
+// UpdateProviderInput for updating a provider. A provider's name is fixed once connected.
 type UpdateProviderInput struct {
-	Name        *string           `json:"name,omitempty"`
-	Description *string           `json:"description,omitempty"`
-	Credentials map[string]string `json:"credentials,omitempty"`
-	Settings    map[string]any    `json:"settings,omitempty"`
+	Description          *string           `json:"description,omitempty"`
+	ExternalID           *string           `json:"externalId,omitempty"`
+	Credentials          map[string]string `json:"credentials,omitempty"`
+	Settings             map[string]string `json:"settings,omitempty"`
+	SyncFrequencyMinutes *int              `json:"syncFrequencyMinutes,omitempty"`
 }
 
 // UpdateProvider updates an existing provider
-func (c *Client) UpdateProvider(ctx context.Context, token string, input *UpdateProviderInput) (*Provider, error) {
-	req, err := c.newRequest(ctx, http.MethodPatch, "/api/v1/providers/"+token, input)
+func (c *Client) UpdateProvider(ctx context.Context, id string, input *UpdateProviderInput) (*Provider, error) {
+	req, err := c.newRequest(ctx, http.MethodPut, "/v1/providers/"+url.PathEscape(id), input)
 	if err != nil {
 		return nil, err
 	}
@@ -136,8 +171,8 @@ func (c *Client) UpdateProvider(ctx context.Context, token string, input *Update
 }
 
 // DeleteProvider removes a provider
-func (c *Client) DeleteProvider(ctx context.Context, token string) error {
-	req, err := c.newRequest(ctx, http.MethodDelete, "/api/v1/providers/"+token, nil)
+func (c *Client) DeleteProvider(ctx context.Context, id string) error {
+	req, err := c.newRequest(ctx, http.MethodDelete, "/v1/providers/"+url.PathEscape(id), nil)
 	if err != nil {
 		return err
 	}
@@ -145,8 +180,8 @@ func (c *Client) DeleteProvider(ctx context.Context, token string) error {
 }
 
 // TestProviderConnection tests the provider connection
-func (c *Client) TestProviderConnection(ctx context.Context, token string) (*ConnectionTestResponse, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/providers/"+token+"/test", nil)
+func (c *Client) TestProviderConnection(ctx context.Context, id string) (*ConnectionTestResponse, error) {
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/providers/"+url.PathEscape(id)+"/test", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -165,11 +200,26 @@ type ConnectionTestResponse struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-// TriggerProviderSync triggers a sync for the provider
-func (c *Client) TriggerProviderSync(ctx context.Context, token string) error {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/providers/"+token+"/sync", nil)
+// SyncTriggerResponse reports whether a requested sync was queued.
+type SyncTriggerResponse struct {
+	Triggered bool    `json:"triggered"`
+	Message   *string `json:"message,omitempty"`
+}
+
+// TriggerProviderSync queues a sync for the provider. A full sync re-reads the provider's whole
+// history rather than only what changed since the last one.
+func (c *Client) TriggerProviderSync(ctx context.Context, id string, fullSync bool) (*SyncTriggerResponse, error) {
+	body := struct {
+		FullSync bool `json:"fullSync"`
+	}{fullSync}
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/providers/"+url.PathEscape(id)+"/sync", body)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return c.do(req, nil)
+
+	var resp SyncTriggerResponse
+	if err := c.do(req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }

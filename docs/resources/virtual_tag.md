@@ -3,52 +3,28 @@
 page_title: "costfluent_virtual_tag Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent virtual tag.
+  Manages a Costfluent virtual tag: a tag value derived for cost rows from ordered rules.
 ---
 
 # costfluent_virtual_tag (Resource)
 
-Manages a Costfluent virtual tag.
+Manages a Costfluent virtual tag: a tag value derived for cost rows from ordered rules.
 
 ## Example Usage
 
 ```terraform
-# A virtual tag derives a tag value from cost rows that never carried one. Rules are an ordered
-# list and the highest priority that matches wins, so the catch-all sits at the bottom.
+# A virtual tag derives a tag value for cost rows that never carried one. The rule set is a JSON
+# document, so it is built with jsonencode.
 resource "costfluent_virtual_tag" "cost_center" {
-  key         = "cost_center"
-  name        = "CostCenter"
-  description = "Virtual cost center assignment"
+  key              = "cost_center"
+  description      = "Virtual cost center assignment"
+  computation_mode = "precompute"
 
-  rules = [
-    {
-      condition = {
-        field    = "tag:Team"
-        operator = "equals"
-        value    = "Platform"
-      }
-      value    = "CC-1001"
-      priority = 100
-    },
-    {
-      condition = {
-        field    = "tag:Team"
-        operator = "equals"
-        value    = "Frontend"
-      }
-      value    = "CC-1002"
-      priority = 90
-    },
-    {
-      condition = {
-        field    = "service_name"
-        operator = "contains"
-        value    = "RDS"
-      }
-      value    = "CC-2001"
-      priority = 50
-    },
-  ]
+  rules = jsonencode([
+    { field = "tag:Team", operator = "equals", value = "Platform", result = "CC-1001" },
+    { field = "tag:Team", operator = "equals", value = "Frontend", result = "CC-1002" },
+    { field = "service_name", operator = "contains", value = "RDS", result = "CC-2001" },
+  ])
 
   # Everything no rule claimed.
   default_value = "CC-9999"
@@ -60,40 +36,22 @@ resource "costfluent_virtual_tag" "cost_center" {
 
 ### Required
 
-- `key` (String) Virtual tag key (used in cost data).
-- `name` (String) Virtual tag display name.
-- `rules` (Attributes List) Tag value mapping rules. (see [below for nested schema](#nestedatt--rules))
+- `computation_mode` (String) precompute (values stored at ingestion) or queryTime (derived when cost is read).
+- `key` (String) Tag key the virtual tag writes, as it appears in cost data.
+- `rules` (String) The rule set as a JSON document; build it with jsonencode.
 
 ### Optional
 
-- `default_value` (String) Default tag value when no rules match.
-- `description` (String) Virtual tag description.
-- `is_active` (Boolean) Whether the virtual tag is active.
-- `workspace_id` (String) Workspace token. Uses provider default if not specified.
+- `default_value` (String) Value for rows no rule matches. Removing it recreates the virtual tag.
+- `description` (String) Virtual tag description. Removing it recreates the virtual tag.
+- `is_active` (Boolean) Whether the virtual tag is applied to cost data.
+- `priority` (Number) Order among the workspace's virtual tags.
+- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
-- `id` (String) Virtual tag token.
+- `id` (String) Virtual tag ID.
+- `last_computed_at` (String) When precomputed values were last written.
+- `status` (String) Virtual tag status.
 - `updated_at` (String) Last update timestamp.
-
-<a id="nestedatt--rules"></a>
-### Nested Schema for `rules`
-
-Required:
-
-- `condition` (Attributes) Rule matching condition. (see [below for nested schema](#nestedatt--rules--condition))
-- `value` (String) Tag value to assign when condition matches.
-
-Optional:
-
-- `priority` (Number) Rule priority (higher = evaluated first).
-
-<a id="nestedatt--rules--condition"></a>
-### Nested Schema for `rules.condition`
-
-Required:
-
-- `field` (String) Field to match (e.g., service_name, region, account_id).
-- `operator` (String) Match operator (equals, contains, starts_with, ends_with, regex).
-- `value` (String) Value to match against.

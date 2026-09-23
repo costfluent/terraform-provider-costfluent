@@ -22,13 +22,11 @@ type WorkspacesDataSourceModel struct {
 }
 
 type WorkspaceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Description types.String `tfsdk:"description"`
-	Currency    types.String `tfsdk:"currency"`
-	Timezone    types.String `tfsdk:"timezone"`
-	CreatedAt   types.String `tfsdk:"created_at"`
-	UpdatedAt   types.String `tfsdk:"updated_at"`
+	ID        types.String `tfsdk:"id"`
+	Name      types.String `tfsdk:"name"`
+	Currency  types.String `tfsdk:"currency"`
+	CreatedAt types.String `tfsdk:"created_at"`
+	UpdatedAt types.String `tfsdk:"updated_at"`
 }
 
 func NewWorkspacesDataSource() datasource.DataSource {
@@ -50,23 +48,15 @@ func (d *WorkspacesDataSource) Schema(_ context.Context, _ datasource.SchemaRequ
 					Attributes: map[string]schema.Attribute{
 						"id": schema.StringAttribute{
 							Computed:    true,
-							Description: "Workspace token.",
+							Description: "Workspace ID.",
 						},
 						"name": schema.StringAttribute{
 							Computed:    true,
 							Description: "Workspace name.",
 						},
-						"description": schema.StringAttribute{
-							Computed:    true,
-							Description: "Workspace description.",
-						},
 						"currency": schema.StringAttribute{
 							Computed:    true,
 							Description: "Default currency.",
-						},
-						"timezone": schema.StringAttribute{
-							Computed:    true,
-							Description: "Default timezone.",
 						},
 						"created_at": schema.StringAttribute{
 							Computed:    true,
@@ -107,16 +97,10 @@ func (d *WorkspacesDataSource) Read(ctx context.Context, req datasource.ReadRequ
 
 	for i, ws := range workspaces {
 		state.Workspaces[i] = WorkspaceModel{
-			ID:        types.StringValue(ws.Token),
+			ID:        types.StringValue(ws.ID),
 			Name:      types.StringValue(ws.Name),
 			Currency:  types.StringValue(ws.Currency),
-			Timezone:  types.StringValue(ws.Timezone),
 			CreatedAt: types.StringValue(ws.CreatedAt.Format(time.RFC3339)),
-		}
-		if ws.Description != nil {
-			state.Workspaces[i].Description = types.StringValue(*ws.Description)
-		} else {
-			state.Workspaces[i].Description = types.StringNull()
 		}
 		if ws.UpdatedAt != nil {
 			state.Workspaces[i].UpdatedAt = types.StringValue(ws.UpdatedAt.Format(time.RFC3339))

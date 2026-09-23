@@ -129,7 +129,8 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Optional: true,
 				Computed: true,
 				Description: "The single dimension the report breaks its window down by. " +
-					"One of Provider, SubAccount, ServiceName, Region, ResourceName, ChargeCategory.",
+					"One of Provider, SubAccount, ServiceName, Region, ResourceName, ChargeCategory, Cluster, Namespace. " +
+					"Cluster and Namespace group Kubernetes cost by the cluster and namespace it was allocated to.",
 			},
 			"settings": schema.SingleNestedAttribute{
 				Optional:    true,
@@ -405,6 +406,15 @@ func optionalString(value *string) types.String {
 		return types.StringNull()
 	}
 	return types.StringValue(*value)
+}
+
+// knownString is the value to send for an optional attribute: nil while it is unset or unknown,
+// so the API applies its own default.
+func knownString(value types.String) *string {
+	if value.IsNull() || value.IsUnknown() {
+		return nil
+	}
+	return value.ValueStringPointer()
 }
 
 var costReportSettingsAttrTypes = map[string]attr.Type{

@@ -3,32 +3,30 @@
 page_title: "costfluent_folder Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent folder for hierarchical organization.
+  Manages a Costfluent folder for organizing cost reports.
 ---
 
 # costfluent_folder (Resource)
 
-Manages a Costfluent folder for hierarchical organization.
+Manages a Costfluent folder for organizing cost reports.
 
 ## Example Usage
 
 ```terraform
-# Root folder
+# Top-level folder
 resource "costfluent_folder" "teams" {
-  name        = "Teams"
-  description = "Team cost allocation"
+  title = "Teams"
 }
 
-# Nested folder
+# Nested folders
 resource "costfluent_folder" "engineering" {
-  name         = "Engineering"
-  description  = "Engineering team costs"
-  parent_token = costfluent_folder.teams.id
+  title     = "Engineering"
+  parent_id = costfluent_folder.teams.id
 }
 
 resource "costfluent_folder" "marketing" {
-  name         = "Marketing"
-  parent_token = costfluent_folder.teams.id
+  title     = "Marketing"
+  parent_id = costfluent_folder.teams.id
 }
 ```
 
@@ -37,17 +35,14 @@ resource "costfluent_folder" "marketing" {
 
 ### Required
 
-- `name` (String) Folder name.
+- `title` (String) Folder title.
 
 ### Optional
 
-- `description` (String) Folder description.
-- `parent_token` (String) Parent folder token for nesting.
-- `workspace_id` (String) Workspace token. Uses provider default if not specified.
+- `parent_id` (String) ID of the folder this one sits in. Omit for a top-level folder; removing it recreates the folder, because the API cannot move a folder back to the top level.
+- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
 
 ### Read-Only
 
-- `created_at` (String) Creation timestamp.
-- `id` (String) Folder token.
-- `path` (String) Full folder path.
-- `updated_at` (String) Last update timestamp.
+- `id` (String) Folder ID.
+- `report_count` (Number) Number of cost reports in the folder.
