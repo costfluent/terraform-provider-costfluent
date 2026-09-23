@@ -2,65 +2,56 @@ package costfluent
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
 // Budget represents a cost budget
 type Budget struct {
-	Token          string         `json:"token"`
-	Name           string         `json:"name"`
-	Description    *string        `json:"description,omitempty"`
-	WorkspaceToken string         `json:"workspace_token"`
-	Amount         float64        `json:"amount"`
-	Currency       string         `json:"currency"`
-	Period         string         `json:"period"` // monthly, quarterly, yearly
-	StartDate      string         `json:"start_date"`
-	EndDate        *string        `json:"end_date,omitempty"`
-	Filters        *BudgetFilters `json:"filters,omitempty"`
-	Alerts         []BudgetAlert  `json:"alerts,omitempty"`
-	CurrentSpend   float64        `json:"current_spend"`
-	ForecastSpend  float64        `json:"forecast_spend"`
-	Status         string         `json:"status"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      *time.Time     `json:"updated_at,omitempty"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Amount       float64 `json:"amount"`
+	Currency     string  `json:"currency"`
+	Period       string  `json:"period"`
+	Status       string  `json:"status"`
+	CurrentSpend float64 `json:"currentSpend"`
+	PercentUsed  float64 `json:"percentUsed"`
+	// SpendAvailability says whether CurrentSpend is backed by collected cost data yet.
+	SpendAvailability string        `json:"spendAvailability"`
+	Alerts            []BudgetAlert `json:"alerts,omitempty"`
+	CreatedAt         time.Time     `json:"createdAt"`
+	UpdatedAt         *time.Time    `json:"updatedAt,omitempty"`
 }
 
-// BudgetFilters for scoping a budget
-type BudgetFilters struct {
-	ProviderTokens []string          `json:"provider_tokens,omitempty"`
-	Services       []string          `json:"services,omitempty"`
-	Regions        []string          `json:"regions,omitempty"`
-	Tags           map[string]string `json:"tags,omitempty"`
-}
-
-// BudgetAlert defines an alert threshold
+// BudgetAlert is one threshold on a budget and whether spend has crossed it
 type BudgetAlert struct {
-	ThresholdPercent int      `json:"threshold_percent"`
-	Channels         []string `json:"channels,omitempty"`
+	ThresholdPercent int        `json:"thresholdPercent"`
+	IsTriggered      bool       `json:"isTriggered"`
+	TriggeredAt      *time.Time `json:"triggeredAt,omitempty"`
+}
+
+// BudgetAlertInput sets a threshold, as a percentage of the budget amount
+type BudgetAlertInput struct {
+	ThresholdPercent int `json:"thresholdPercent"`
 }
 
 // BudgetsListResponse is the response for listing budgets
 type BudgetsListResponse = ListResponse[Budget]
 
-// ListBudgets returns paginated budgets
-func (c *Client) ListBudgets(ctx context.Context, opts *PageOptions) (*BudgetsListResponse, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/budgets", nil)
+// ListBudgets returns paginated budgets, of one workspace when workspaceID or the client's
+// default workspace is set, and of the whole organization otherwise
+func (c *Client) ListBudgets(ctx context.Context, workspaceID string, opts *PageOptions) (*BudgetsListResponse, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/budgets", nil)
 	if err != nil {
 		return nil, err
 	}
-
-	if opts != nil {
+	if id := c.workspace(workspaceID); id != "" {
 		q := req.URL.Query()
-		if opts.Page > 0 {
-			q.Set("page", fmt.Sprint(opts.Page))
-		}
-		if opts.Limit > 0 {
-			q.Set("limit", fmt.Sprint(opts.Limit))
-		}
+		q.Set("workspaceId", id)
 		req.URL.RawQuery = q.Encode()
 	}
+	opts.apply(req)
 
 	var resp BudgetsListResponse
 	if err := c.do(req, &resp); err != nil {
@@ -70,30 +61,15 @@ func (c *Client) ListBudgets(ctx context.Context, opts *PageOptions) (*BudgetsLi
 }
 
 // ListAllBudgets fetches all budgets across all pages
-func (c *Client) ListAllBudgets(ctx context.Context, pageSize int) ([]Budget, error) {
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-
-	var all []Budget
-	page := 1
-	for {
-		resp, err := c.ListBudgets(ctx, &PageOptions{Page: page, Limit: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, resp.Data...)
-		if !resp.Links.HasNextPage() || len(resp.Data) == 0 {
-			break
-		}
-		page++
-	}
-	return all, nil
+func (c *Client) ListAllBudgets(ctx context.Context, workspaceID string, pageSize int) ([]Budget, error) {
+	return listAll(pageSize, func(p *PageOptions) (*ListResponse[Budget], error) {
+		return c.ListBudgets(ctx, workspaceID, p)
+	})
 }
 
-// GetBudget returns a single budget by token
-func (c *Client) GetBudget(ctx context.Context, token string) (*Budget, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/budgets/"+token, nil)
+// GetBudget returns a single budget by ID
+func (c *Client) GetBudget(ctx context.Context, id string) (*Budget, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/budgets/"+url.PathEscape(id), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -105,22 +81,26 @@ func (c *Client) GetBudget(ctx context.Context, token string) (*Budget, error) {
 	return &budget, nil
 }
 
-// CreateBudgetInput for creating a new budget
+// CreateBudgetInput for creating a new budget. WorkspaceID falls back to the client's default
+// workspace; SegmentID scopes the budget to one allocation segment's cost.
 type CreateBudgetInput struct {
-	Name        string         `json:"name"`
-	Description *string        `json:"description,omitempty"`
-	Amount      float64        `json:"amount"`
-	Currency    *string        `json:"currency,omitempty"`
-	Period      string         `json:"period"`
-	StartDate   string         `json:"start_date"`
-	EndDate     *string        `json:"end_date,omitempty"`
-	Filters     *BudgetFilters `json:"filters,omitempty"`
-	Alerts      []BudgetAlert  `json:"alerts,omitempty"`
+	WorkspaceID string             `json:"workspaceId"`
+	Name        string             `json:"name"`
+	Amount      float64            `json:"amount"`
+	Currency    string             `json:"currency"`
+	Period      string             `json:"period"`
+	Alerts      []BudgetAlertInput `json:"alerts,omitempty"`
+	SegmentID   *string            `json:"segmentId,omitempty"`
 }
 
 // CreateBudget creates a new budget
 func (c *Client) CreateBudget(ctx context.Context, input *CreateBudgetInput) (*Budget, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/budgets", input)
+	body := *input
+	var err error
+	if body.WorkspaceID, err = c.requireWorkspace(body.WorkspaceID); err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/budgets", &body)
 	if err != nil {
 		return nil, err
 	}
@@ -132,19 +112,16 @@ func (c *Client) CreateBudget(ctx context.Context, input *CreateBudgetInput) (*B
 	return &budget, nil
 }
 
-// UpdateBudgetInput for updating a budget
+// UpdateBudgetInput for updating a budget. Period, currency and alerts are fixed at creation.
 type UpdateBudgetInput struct {
-	Name        *string        `json:"name,omitempty"`
-	Description *string        `json:"description,omitempty"`
-	Amount      *float64       `json:"amount,omitempty"`
-	EndDate     *string        `json:"end_date,omitempty"`
-	Filters     *BudgetFilters `json:"filters,omitempty"`
-	Alerts      []BudgetAlert  `json:"alerts,omitempty"`
+	Name      *string  `json:"name,omitempty"`
+	Amount    *float64 `json:"amount,omitempty"`
+	SegmentID *string  `json:"segmentId,omitempty"`
 }
 
 // UpdateBudget updates an existing budget
-func (c *Client) UpdateBudget(ctx context.Context, token string, input *UpdateBudgetInput) (*Budget, error) {
-	req, err := c.newRequest(ctx, http.MethodPatch, "/api/v1/budgets/"+token, input)
+func (c *Client) UpdateBudget(ctx context.Context, id string, input *UpdateBudgetInput) (*Budget, error) {
+	req, err := c.newRequest(ctx, http.MethodPut, "/v1/budgets/"+url.PathEscape(id), input)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +134,8 @@ func (c *Client) UpdateBudget(ctx context.Context, token string, input *UpdateBu
 }
 
 // DeleteBudget removes a budget
-func (c *Client) DeleteBudget(ctx context.Context, token string) error {
-	req, err := c.newRequest(ctx, http.MethodDelete, "/api/v1/budgets/"+token, nil)
+func (c *Client) DeleteBudget(ctx context.Context, id string) error {
+	req, err := c.newRequest(ctx, http.MethodDelete, "/v1/budgets/"+url.PathEscape(id), nil)
 	if err != nil {
 		return err
 	}

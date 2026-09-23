@@ -3,72 +3,130 @@ package costfluent
 import (
 	"context"
 	"net/http"
-	"time"
+	"net/url"
+	"strconv"
 )
 
-// DateRange scopes a cost query.
-//
-// Declared here rather than with the saved views it used to live beside: a view's date range is
-// part of its own definition now, and the query surface is the only thing that still needs a
-// standalone range.
-type DateRange struct {
-	// Type is "relative" or "absolute".
-	Type string `json:"type"`
+// CostFilterOptions are the scoping options the cost data and cost summary queries share. Dates
+// are calendar days, YYYY-MM-DD, and both are required. A nil switch keeps the API's default:
+// credits excluded, refunds and tax included, amortized cost.
+type CostFilterOptions struct {
+	StartDate string
+	EndDate   string
 
-	// Period is set for a relative range: last_7_days, last_30_days, this_month, and so on.
-	Period    *string `json:"period,omitempty"`
-	StartDate *string `json:"start_date,omitempty"`
-	EndDate   *string `json:"end_date,omitempty"`
+	// WorkspaceID falls back to the client's default workspace, and to the whole organization
+	// when neither is set.
+	WorkspaceID     string
+	CloudAccountIDs []string
+	Filter          string
+	IncludeCredits  *bool
+	IncludeRefunds  *bool
+	IncludeTax      *bool
+	Amortize        *bool
 }
 
-// CostDataQuery for querying cost data
+func (c *Client) applyCostFilter(q url.Values, o *CostFilterOptions) {
+	setIf(q, "startDate", o.StartDate)
+	setIf(q, "endDate", o.EndDate)
+	setIf(q, "workspaceId", c.workspace(o.WorkspaceID))
+	for _, id := range o.CloudAccountIDs {
+		q.Add("cloudAccountIds", id)
+	}
+	setIf(q, "filter", o.Filter)
+	for key, v := range map[string]*bool{
+		"includeCredits": o.IncludeCredits,
+		"includeRefunds": o.IncludeRefunds,
+		"includeTax":     o.IncludeTax,
+		"amortize":       o.Amortize,
+	} {
+		if v != nil {
+			q.Set(key, strconv.FormatBool(*v))
+		}
+	}
+}
+
+// CostDataQuery reads cost over time. Granularity is Day, Week, Month or Quarter (Day when
+// empty); GroupBy names one cost dimension, such as Service or Region.
 type CostDataQuery struct {
-	DateRange DateRange      `json:"date_range"`
-	GroupBy   []string       `json:"group_by,omitempty"`
-	Filters   map[string]any `json:"filters,omitempty"`
-	Metrics   []string       `json:"metrics,omitempty"`
-	Limit     *int           `json:"limit,omitempty"`
+	CostFilterOptions
+	Granularity string
+	GroupBy     string
+	Page        int
+	PageSize    int
 }
 
-// CostDataResponse is the response for cost data queries
+// CostDataResponse is one page of cost rows and what they add up to
 type CostDataResponse struct {
-	Data        []CostDataRow `json:"data"`
-	Totals      CostTotals    `json:"totals"`
-	Currency    string        `json:"currency"`
-	DateRange   DateRange     `json:"date_range"`
-	GeneratedAt time.Time     `json:"generated_at"`
+	Data []CostDataPoint `json:"data"`
+	Meta CostDataMeta    `json:"meta"`
 }
 
-// CostDataRow represents a single row of cost data
-type CostDataRow struct {
-	Dimensions map[string]string `json:"dimensions"`
-	Metrics    CostMetrics       `json:"metrics"`
+// CostDataPoint is the cost of one period, and of one group when the query grouped
+type CostDataPoint struct {
+	Date          string            `json:"date"`
+	Cost          float64           `json:"cost"`
+	ListCost      float64           `json:"listCost"`
+	AmortizedCost float64           `json:"amortizedCost"`
+	Currency      string            `json:"currency"`
+	Dimensions    map[string]string `json:"dimensions,omitempty"`
 }
 
-// CostMetrics contains cost metric values
-type CostMetrics struct {
-	BilledCost    float64 `json:"billed_cost"`
-	EffectiveCost float64 `json:"effective_cost"`
-	ListCost      float64 `json:"list_cost,omitempty"`
-	Usage         float64 `json:"usage,omitempty"`
-	UsageUnit     string  `json:"usage_unit,omitempty"`
+// CostDataMeta describes the query that was answered
+type CostDataMeta struct {
+	StartDate    string                `json:"startDate"`
+	EndDate      string                `json:"endDate"`
+	Granularity  string                `json:"granularity"`
+	TotalRecords int                   `json:"totalRecords"`
+	TotalCost    float64               `json:"totalCost"`
+	Currency     string                `json:"currency"`
+	Presentation *CurrencyPresentation `json:"presentation,omitempty"`
+
+	// HistoryFloor is the earliest day the organization's plan lets it read, when the plan
+	// limits history.
+	HistoryFloor *string `json:"historyFloor,omitempty"`
 }
 
-// CostTotals contains aggregated totals
-type CostTotals struct {
-	BilledCost     float64 `json:"billed_cost"`
-	EffectiveCost  float64 `json:"effective_cost"`
-	ListCost       float64 `json:"list_cost,omitempty"`
-	Savings        float64 `json:"savings,omitempty"`
-	SavingsPercent float64 `json:"savings_percent,omitempty"`
+// CurrencyPresentation explains how figures in more than one currency were brought to one
+type CurrencyPresentation struct {
+	Conversions      []CurrencyConversion `json:"conversions,omitempty"`
+	Unconverted      []CurrencyAmount     `json:"unconverted,omitempty"`
+	TotalsByCurrency []CurrencyAmount     `json:"totalsByCurrency,omitempty"`
 }
 
-// QueryCostData queries cost data with grouping and filtering
+// CurrencyConversion is one source currency converted into the presentation currency
+type CurrencyConversion struct {
+	SourceCurrency  string  `json:"sourceCurrency"`
+	SourceAmount    float64 `json:"sourceAmount"`
+	ConvertedAmount float64 `json:"convertedAmount"`
+	Method          string  `json:"method,omitempty"`
+	Source          string  `json:"source"`
+	Description     string  `json:"description"`
+}
+
+// CurrencyAmount is an amount in one currency
+type CurrencyAmount struct {
+	Currency string  `json:"currency"`
+	Amount   float64 `json:"amount"`
+}
+
+// QueryCostData reads cost over time with optional grouping and filtering
 func (c *Client) QueryCostData(ctx context.Context, query *CostDataQuery) (*CostDataResponse, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/cost-data/query", query)
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/costs", nil)
 	if err != nil {
 		return nil, err
 	}
+
+	q := req.URL.Query()
+	c.applyCostFilter(q, &query.CostFilterOptions)
+	setIf(q, "granularity", query.Granularity)
+	setIf(q, "groupBy", query.GroupBy)
+	if query.Page > 0 {
+		q.Set("page", strconv.Itoa(query.Page))
+	}
+	if query.PageSize > 0 {
+		q.Set("pageSize", strconv.Itoa(query.PageSize))
+	}
+	req.URL.RawQuery = q.Encode()
 
 	var resp CostDataResponse
 	if err := c.do(req, &resp); err != nil {
@@ -77,38 +135,45 @@ func (c *Client) QueryCostData(ctx context.Context, query *CostDataQuery) (*Cost
 	return &resp, nil
 }
 
-// CostSummary represents a cost summary
+// CostSummary is the total cost of a window, its change against the window before, and where it
+// went
 type CostSummary struct {
-	Period        string    `json:"period"`
-	TotalCost     float64   `json:"total_cost"`
-	PreviousCost  float64   `json:"previous_cost"`
-	Change        float64   `json:"change"`
-	ChangePercent float64   `json:"change_percent"`
-	Forecast      float64   `json:"forecast,omitempty"`
-	Currency      string    `json:"currency"`
-	TopServices   []TopItem `json:"top_services,omitempty"`
-	TopProviders  []TopItem `json:"top_providers,omitempty"`
+	TotalCost          float64                 `json:"totalCost"`
+	TotalListCost      float64                 `json:"totalListCost"`
+	TotalAmortizedCost float64                 `json:"totalAmortizedCost"`
+	Currency           string                  `json:"currency"`
+	CostChange         float64                 `json:"costChange"`
+	CostChangePercent  float64                 `json:"costChangePercent"`
+	Presentation       *CurrencyPresentation   `json:"presentation,omitempty"`
+	TopServices        []ServiceCostBreakdown  `json:"topServices,omitempty"`
+	ByProvider         []ProviderCostBreakdown `json:"byProvider,omitempty"`
+	HistoryFloor       *string                 `json:"historyFloor,omitempty"`
 }
 
-// TopItem represents a top cost contributor
-type TopItem struct {
-	Name    string  `json:"name"`
-	Cost    float64 `json:"cost"`
-	Percent float64 `json:"percent"`
-	Change  float64 `json:"change,omitempty"`
+// ServiceCostBreakdown is one service's share of the total
+type ServiceCostBreakdown struct {
+	ServiceName string  `json:"serviceName"`
+	Cost        float64 `json:"cost"`
+	Percentage  float64 `json:"percentage"`
 }
 
-// GetCostSummary returns a cost summary for the specified period
-func (c *Client) GetCostSummary(ctx context.Context, period string) (*CostSummary, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/cost-data/summary", nil)
+// ProviderCostBreakdown is one provider's share of the total
+type ProviderCostBreakdown struct {
+	ProviderID   string  `json:"providerId"`
+	ProviderName string  `json:"providerName"`
+	ProviderKey  string  `json:"providerKey"`
+	Cost         float64 `json:"cost"`
+}
+
+// GetCostSummary summarizes cost over a window
+func (c *Client) GetCostSummary(ctx context.Context, opts *CostFilterOptions) (*CostSummary, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/costs/summary", nil)
 	if err != nil {
 		return nil, err
 	}
 
 	q := req.URL.Query()
-	if period != "" {
-		q.Set("period", period)
-	}
+	c.applyCostFilter(q, opts)
 	req.URL.RawQuery = q.Encode()
 
 	var summary CostSummary
@@ -116,40 +181,4 @@ func (c *Client) GetCostSummary(ctx context.Context, period string) (*CostSummar
 		return nil, err
 	}
 	return &summary, nil
-}
-
-// CostTrend represents cost trend data
-type CostTrend struct {
-	Points   []CostTrendPoint `json:"points"`
-	Forecast []CostTrendPoint `json:"forecast,omitempty"`
-	Currency string           `json:"currency"`
-}
-
-// CostTrendPoint represents a single point in cost trend
-type CostTrendPoint struct {
-	Date string  `json:"date"`
-	Cost float64 `json:"cost"`
-}
-
-// GetCostTrend returns cost trend data
-func (c *Client) GetCostTrend(ctx context.Context, period string, granularity string) (*CostTrend, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/cost-data/trend", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	q := req.URL.Query()
-	if period != "" {
-		q.Set("period", period)
-	}
-	if granularity != "" {
-		q.Set("granularity", granularity)
-	}
-	req.URL.RawQuery = q.Encode()
-
-	var trend CostTrend
-	if err := c.do(req, &trend); err != nil {
-		return nil, err
-	}
-	return &trend, nil
 }

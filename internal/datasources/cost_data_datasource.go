@@ -8,7 +8,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 
 var _ datasource.DataSource = &CostDataDataSource{}
@@ -19,52 +18,35 @@ type CostDataDataSource struct {
 }
 
 type CostDataDataSourceModel struct {
-	WorkspaceID types.String `tfsdk:"workspace_id"`
-	DateRange   types.Object `tfsdk:"date_range"`
-	GroupBy     types.List   `tfsdk:"group_by"`
-	Filters     types.Map    `tfsdk:"filters"`
-	Metrics     types.List   `tfsdk:"metrics"`
-	Limit       types.Int64  `tfsdk:"limit"`
-	Data        types.List   `tfsdk:"data"`
-	Totals      types.Object `tfsdk:"totals"`
-	Currency    types.String `tfsdk:"currency"`
+	WorkspaceID  types.String  `tfsdk:"workspace_id"`
+	StartDate    types.String  `tfsdk:"start_date"`
+	EndDate      types.String  `tfsdk:"end_date"`
+	Granularity  types.String  `tfsdk:"granularity"`
+	GroupBy      types.String  `tfsdk:"group_by"`
+	Filter       types.String  `tfsdk:"filter"`
+	Limit        types.Int64   `tfsdk:"limit"`
+	Data         types.List    `tfsdk:"data"`
+	TotalCost    types.Float64 `tfsdk:"total_cost"`
+	TotalRecords types.Int64   `tfsdk:"total_records"`
+	Currency     types.String  `tfsdk:"currency"`
 }
 
 type CostDataRowModel struct {
+	Date          types.String  `tfsdk:"date"`
 	Dimensions    types.Map     `tfsdk:"dimensions"`
-	BilledCost    types.Float64 `tfsdk:"billed_cost"`
-	EffectiveCost types.Float64 `tfsdk:"effective_cost"`
+	Cost          types.Float64 `tfsdk:"cost"`
 	ListCost      types.Float64 `tfsdk:"list_cost"`
-}
-
-type CostTotalsModel struct {
-	BilledCost     types.Float64 `tfsdk:"billed_cost"`
-	EffectiveCost  types.Float64 `tfsdk:"effective_cost"`
-	ListCost       types.Float64 `tfsdk:"list_cost"`
-	Savings        types.Float64 `tfsdk:"savings"`
-	SavingsPercent types.Float64 `tfsdk:"savings_percent"`
-}
-
-type DateRangeInputModel struct {
-	Type      types.String `tfsdk:"type"`
-	Period    types.String `tfsdk:"period"`
-	StartDate types.String `tfsdk:"start_date"`
-	EndDate   types.String `tfsdk:"end_date"`
+	AmortizedCost types.Float64 `tfsdk:"amortized_cost"`
+	Currency      types.String  `tfsdk:"currency"`
 }
 
 var costDataRowAttrTypes = map[string]attr.Type{
+	"date":           types.StringType,
 	"dimensions":     types.MapType{ElemType: types.StringType},
-	"billed_cost":    types.Float64Type,
-	"effective_cost": types.Float64Type,
+	"cost":           types.Float64Type,
 	"list_cost":      types.Float64Type,
-}
-
-var costTotalsAttrTypes = map[string]attr.Type{
-	"billed_cost":     types.Float64Type,
-	"effective_cost":  types.Float64Type,
-	"list_cost":       types.Float64Type,
-	"savings":         types.Float64Type,
-	"savings_percent": types.Float64Type,
+	"amortized_cost": types.Float64Type,
+	"currency":       types.StringType,
 }
 
 func NewCostDataDataSource() datasource.DataSource {
@@ -77,107 +59,80 @@ func (d *CostDataDataSource) Metadata(_ context.Context, req datasource.Metadata
 
 func (d *CostDataDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Query cost data with grouping and filtering. Note: This query may be slow for large date ranges.",
+		Description: "Query cost over time with optional grouping and filtering. This query may be slow for large windows.",
 		Attributes: map[string]schema.Attribute{
 			"workspace_id": schema.StringAttribute{
 				Optional:    true,
-				Description: "Workspace token. Uses provider default if not specified.",
+				Description: "Workspace ID. Uses the provider's workspace if not specified, and the whole organization when neither is set.",
 			},
-			"date_range": schema.SingleNestedAttribute{
+			"start_date": schema.StringAttribute{
 				Required:    true,
-				Description: "Date range for the query.",
-				Attributes: map[string]schema.Attribute{
-					"type": schema.StringAttribute{
-						Required:    true,
-						Description: "Date range type: relative or absolute.",
-					},
-					"period": schema.StringAttribute{
-						Optional:    true,
-						Description: "Period preset for relative type (e.g., last_7_days, last_30_days, this_month).",
-					},
-					"start_date": schema.StringAttribute{
-						Optional:    true,
-						Description: "Start date for absolute type (YYYY-MM-DD).",
-					},
-					"end_date": schema.StringAttribute{
-						Optional:    true,
-						Description: "End date for absolute type (YYYY-MM-DD).",
-					},
-				},
+				Description: "First day of the window (YYYY-MM-DD).",
 			},
-			"group_by": schema.ListAttribute{
-				Optional:    true,
-				ElementType: types.StringType,
-				Description: "Dimensions to group by (e.g., service, region, account).",
+			"end_date": schema.StringAttribute{
+				Required:    true,
+				Description: "Last day of the window (YYYY-MM-DD).",
 			},
-			"filters": schema.MapAttribute{
+			"granularity": schema.StringAttribute{
 				Optional:    true,
-				ElementType: types.StringType,
-				Description: "Filters to apply to the query.",
+				Description: "Period each row covers: Day, Week, Month or Quarter. Defaults to Day.",
 			},
-			"metrics": schema.ListAttribute{
+			"group_by": schema.StringAttribute{
 				Optional:    true,
-				ElementType: types.StringType,
-				Description: "Metrics to include (billed_cost, effective_cost, list_cost).",
+				Description: "Cost dimension to group by, such as Service or Region.",
+			},
+			"filter": schema.StringAttribute{
+				Optional:    true,
+				Description: "Cost filter expression.",
 			},
 			"limit": schema.Int64Attribute{
 				Optional:    true,
-				Description: "Maximum number of rows to return.",
+				Description: "Maximum number of rows to return (1-1000). Defaults to 100.",
 			},
 			"data": schema.ListNestedAttribute{
 				Computed:    true,
-				Description: "Query result rows.",
+				Description: "Cost rows.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
+						"date": schema.StringAttribute{
+							Computed:    true,
+							Description: "First day of the period the row covers.",
+						},
 						"dimensions": schema.MapAttribute{
 							Computed:    true,
 							ElementType: types.StringType,
-							Description: "Dimension values for this row.",
+							Description: "Group values for this row.",
 						},
-						"billed_cost": schema.Float64Attribute{
+						"cost": schema.Float64Attribute{
 							Computed:    true,
-							Description: "Billed cost.",
-						},
-						"effective_cost": schema.Float64Attribute{
-							Computed:    true,
-							Description: "Effective cost (after discounts).",
+							Description: "Cost.",
 						},
 						"list_cost": schema.Float64Attribute{
 							Computed:    true,
-							Description: "List cost (before discounts).",
+							Description: "Cost at list prices.",
+						},
+						"amortized_cost": schema.Float64Attribute{
+							Computed:    true,
+							Description: "Amortized cost.",
+						},
+						"currency": schema.StringAttribute{
+							Computed:    true,
+							Description: "Currency of the row.",
 						},
 					},
 				},
 			},
-			"totals": schema.SingleNestedAttribute{
+			"total_cost": schema.Float64Attribute{
 				Computed:    true,
-				Description: "Aggregated totals.",
-				Attributes: map[string]schema.Attribute{
-					"billed_cost": schema.Float64Attribute{
-						Computed:    true,
-						Description: "Total billed cost.",
-					},
-					"effective_cost": schema.Float64Attribute{
-						Computed:    true,
-						Description: "Total effective cost.",
-					},
-					"list_cost": schema.Float64Attribute{
-						Computed:    true,
-						Description: "Total list cost.",
-					},
-					"savings": schema.Float64Attribute{
-						Computed:    true,
-						Description: "Total savings.",
-					},
-					"savings_percent": schema.Float64Attribute{
-						Computed:    true,
-						Description: "Savings percentage.",
-					},
-				},
+				Description: "Total cost across every row that matches.",
+			},
+			"total_records": schema.Int64Attribute{
+				Computed:    true,
+				Description: "Number of rows that match, beyond the limit too.",
 			},
 			"currency": schema.StringAttribute{
 				Computed:    true,
-				Description: "Currency code for the results.",
+				Description: "Currency of the total.",
 			},
 		},
 	}
@@ -202,98 +157,41 @@ func (d *CostDataDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
-	client := d.client
-	if !config.WorkspaceID.IsNull() {
-		client = client.Workspace(config.WorkspaceID.ValueString())
-	}
-
-	// Parse date range
-	var dateRangeModel DateRangeInputModel
-	resp.Diagnostics.Append(config.DateRange.As(ctx, &dateRangeModel, basetypes.ObjectAsOptions{})...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	dateRange := costfluent.DateRange{
-		Type: dateRangeModel.Type.ValueString(),
-	}
-	if !dateRangeModel.Period.IsNull() {
-		period := dateRangeModel.Period.ValueString()
-		dateRange.Period = &period
-	}
-	if !dateRangeModel.StartDate.IsNull() {
-		start := dateRangeModel.StartDate.ValueString()
-		dateRange.StartDate = &start
-	}
-	if !dateRangeModel.EndDate.IsNull() {
-		end := dateRangeModel.EndDate.ValueString()
-		dateRange.EndDate = &end
-	}
-
-	query := &costfluent.CostDataQuery{
-		DateRange: dateRange,
-	}
-
-	if !config.GroupBy.IsNull() {
-		var groupBy []string
-		resp.Diagnostics.Append(config.GroupBy.ElementsAs(ctx, &groupBy, false)...)
-		query.GroupBy = groupBy
-	}
-
-	if !config.Filters.IsNull() {
-		filters := make(map[string]any)
-		var strFilters map[string]string
-		resp.Diagnostics.Append(config.Filters.ElementsAs(ctx, &strFilters, false)...)
-		for k, v := range strFilters {
-			filters[k] = v
-		}
-		query.Filters = filters
-	}
-
-	if !config.Metrics.IsNull() {
-		var metrics []string
-		resp.Diagnostics.Append(config.Metrics.ElementsAs(ctx, &metrics, false)...)
-		query.Metrics = metrics
-	}
-
-	if !config.Limit.IsNull() {
-		limit := int(config.Limit.ValueInt64())
-		query.Limit = &limit
-	}
-
-	result, err := client.QueryCostData(ctx, query)
+	result, err := d.client.QueryCostData(ctx, &costfluent.CostDataQuery{
+		CostFilterOptions: costfluent.CostFilterOptions{
+			StartDate:   config.StartDate.ValueString(),
+			EndDate:     config.EndDate.ValueString(),
+			WorkspaceID: config.WorkspaceID.ValueString(),
+			Filter:      config.Filter.ValueString(),
+		},
+		Granularity: config.Granularity.ValueString(),
+		GroupBy:     config.GroupBy.ValueString(),
+		PageSize:    int(config.Limit.ValueInt64()),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to query cost data", err.Error())
 		return
 	}
 
-	// Map result to model
-	config.Currency = types.StringValue(result.Currency)
-
-	// Map data rows
-	dataRows := make([]CostDataRowModel, len(result.Data))
+	rows := make([]CostDataRowModel, len(result.Data))
 	for i, row := range result.Data {
-		dims, _ := types.MapValueFrom(ctx, types.StringType, row.Dimensions)
-		dataRows[i] = CostDataRowModel{
+		dims, diags := types.MapValueFrom(ctx, types.StringType, row.Dimensions)
+		resp.Diagnostics.Append(diags...)
+		rows[i] = CostDataRowModel{
+			Date:          types.StringValue(row.Date),
 			Dimensions:    dims,
-			BilledCost:    types.Float64Value(row.Metrics.BilledCost),
-			EffectiveCost: types.Float64Value(row.Metrics.EffectiveCost),
-			ListCost:      types.Float64Value(row.Metrics.ListCost),
+			Cost:          types.Float64Value(row.Cost),
+			ListCost:      types.Float64Value(row.ListCost),
+			AmortizedCost: types.Float64Value(row.AmortizedCost),
+			Currency:      types.StringValue(row.Currency),
 		}
 	}
-	dataList, _ := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: costDataRowAttrTypes}, dataRows)
-	config.Data = dataList
-
-	// Map totals
-	totalsModel := CostTotalsModel{
-		BilledCost:     types.Float64Value(result.Totals.BilledCost),
-		EffectiveCost:  types.Float64Value(result.Totals.EffectiveCost),
-		ListCost:       types.Float64Value(result.Totals.ListCost),
-		Savings:        types.Float64Value(result.Totals.Savings),
-		SavingsPercent: types.Float64Value(result.Totals.SavingsPercent),
-	}
-	totalsObj, _ := types.ObjectValueFrom(ctx, costTotalsAttrTypes, totalsModel)
-	config.Totals = totalsObj
+	data, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: costDataRowAttrTypes}, rows)
+	resp.Diagnostics.Append(diags...)
+	config.Data = data
+	config.TotalCost = types.Float64Value(result.Meta.TotalCost)
+	config.TotalRecords = types.Int64Value(int64(result.Meta.TotalRecords))
+	config.Currency = types.StringValue(result.Meta.Currency)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }

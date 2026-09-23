@@ -3,36 +3,33 @@
 page_title: "costfluent_cost_alert Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent cost alert.
+  Manages a Costfluent cost alert: a threshold on a workspace's cost, optionally narrowed to providers and a filter, that notifies the linked apps when it is crossed.
 ---
 
 # costfluent_cost_alert (Resource)
 
-Manages a Costfluent cost alert.
+Manages a Costfluent cost alert: a threshold on a workspace's cost, optionally narrowed to providers and a filter, that notifies the linked apps when it is crossed.
 
 ## Example Usage
 
 ```terraform
-# Threshold alert
+# Absolute threshold on one provider's cost
 resource "costfluent_cost_alert" "high_spend" {
   name            = "High Daily Spend"
-  description     = "Alert when daily spend exceeds $1000"
-  type            = "threshold"
-  metric          = "billed_cost"
-  operator        = "gt"
+  threshold_type  = "absolute"
   threshold_value = 1000
-  period          = "daily"
-  channels        = ["chn_slack_alerts"]
+  provider_ids    = ["prv_abc123"]
 }
 
-# Anomaly alert (paused)
-resource "costfluent_cost_alert" "anomaly" {
-  name            = "Cost Anomaly Detection"
-  type            = "anomaly"
-  metric          = "effective_cost"
-  operator        = "gt"
-  threshold_value = 20 # 20% deviation
-  is_paused       = true
+# Growth against the previous week, narrowed by a filter, evaluated every 6 hours (paused)
+resource "costfluent_cost_alert" "ec2_growth" {
+  name                         = "EC2 week-over-week growth"
+  threshold_type               = "percentageIncrease"
+  threshold_value              = 20
+  comparison_period            = "previousWeek"
+  filter                       = "service = 'Amazon EC2'"
+  evaluation_frequency_minutes = 360
+  is_paused                    = true
 }
 ```
 
@@ -41,24 +38,24 @@ resource "costfluent_cost_alert" "anomaly" {
 
 ### Required
 
-- `metric` (String) Metric to monitor (e.g., billed_cost, effective_cost).
 - `name` (String) Alert name.
-- `operator` (String) Comparison operator (gt, gte, lt, lte).
-- `threshold_value` (Number) Threshold value for the alert.
-- `type` (String) Alert type (threshold, anomaly, forecast).
+- `threshold_type` (String) What the threshold measures: absolute (a cost amount), percentageIncrease (growth against comparison_period), budgetPercentage or tagCoverageBelow.
+- `threshold_value` (Number) Threshold, in the unit threshold_type names. Must be greater than zero.
 
 ### Optional
 
-- `channels` (List of String) Notification channel tokens.
-- `description` (String) Alert description.
-- `is_paused` (Boolean) Whether the alert is paused.
-- `period` (String) Time period for the condition (e.g., daily, weekly, monthly).
-- `workspace_id` (String) Workspace token. Uses provider default if not specified.
+- `app_ids` (List of String) Connected apps the alert notifies. Emptying it recreates the alert.
+- `comparison_period` (String) Period a percentageIncrease threshold compares against: previousDay, previousWeek, previousMonth or sameDayLastMonth. Removing it recreates the alert.
+- `evaluation_frequency_minutes` (Number) How often the alert is evaluated, 15 to 1440 minutes. Defaults to 60.
+- `filter` (String) Cost filter expression narrowing what the alert watches. Removing it recreates the alert.
+- `is_paused` (Boolean) Whether evaluation is paused.
+- `provider_ids` (List of String) Providers whose cost the alert watches. Omit for every provider; emptying it recreates the alert.
+- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
-- `id` (String) Cost alert token.
-- `last_triggered_at` (String) Last triggered timestamp.
-- `status` (String) Alert status (active, paused).
+- `id` (String) Cost alert ID.
+- `last_evaluated_at` (String) When the alert was last evaluated.
+- `status` (String) Alert status.
 - `updated_at` (String) Last update timestamp.

@@ -19,7 +19,8 @@ resource "costfluent_workspace" "production" {
 }
 
 resource "costfluent_folder" "reports" {
-  name = "Reports"
+  workspace_id = costfluent_workspace.production.id
+  title        = "Reports"
 }
 
 # A saved cost report: one window, one grouping dimension, one filter, and the money settings the
@@ -87,7 +88,7 @@ resource "costfluent_cost_report" "q4_eu_compute" {
 - `end_date` (String) Inclusive last day, for an absolute window.
 - `filter` (String) The cost filter as its JSON document. Omit for a report with no filter.
 - `folder_id` (String) Folder token the report is filed under.
-- `group_by` (String) The single dimension the report breaks its window down by. One of Provider, SubAccount, ServiceName, Region, ResourceName, ChargeCategory.
+- `group_by` (String) The single dimension the report breaks its window down by. One of Provider, SubAccount, ServiceName, Region, ResourceName, ChargeCategory, Cluster, Namespace. Cluster and Namespace group Kubernetes cost by the cluster and namespace it was allocated to.
 - `settings` (Attributes) What the report counts. Each of these changes the money. (see [below for nested schema](#nestedatt--settings))
 - `start_date` (String) Inclusive first day, for an absolute window.
 

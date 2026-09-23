@@ -3,56 +3,46 @@
 page_title: "costfluent_cost_data Data Source - Costfluent"
 subcategory: ""
 description: |-
-  Query cost data with grouping and filtering. Note: This query may be slow for large date ranges.
+  Query cost over time with optional grouping and filtering. This query may be slow for large windows.
 ---
 
 # costfluent_cost_data (Data Source)
 
-Query cost data with grouping and filtering. Note: This query may be slow for large date ranges.
+Query cost over time with optional grouping and filtering. This query may be slow for large windows.
 
 ## Example Usage
 
 ```terraform
-# Query the last 30 days of cost, grouped by service.
+# Daily cost for September, grouped by service.
 data "costfluent_cost_data" "by_service" {
-  date_range = {
-    type   = "relative"
-    period = "last_30_days"
-  }
-
-  group_by = ["service"]
-  metrics  = ["billed_cost", "effective_cost"]
-  limit    = 20
+  start_date = "2026-09-01"
+  end_date   = "2026-09-30"
+  group_by   = "Service"
+  limit      = 100
 }
 
 output "total_cost" {
-  value = data.costfluent_cost_data.by_service.totals.billed_cost
+  value = data.costfluent_cost_data.by_service.total_cost
 }
 
-output "top_services" {
+output "daily_service_cost" {
   value = [for row in data.costfluent_cost_data.by_service.data : {
-    service = row.dimensions["service"]
-    cost    = row.billed_cost
+    date    = row.date
+    service = row.dimensions["Service"]
+    cost    = row.cost
   }]
 }
 
-# An absolute window instead of a preset, narrowed to one region.
-data "costfluent_cost_data" "us_east_q1" {
-  date_range = {
-    type       = "absolute"
-    start_date = "2026-01-01"
-    end_date   = "2026-03-31"
-  }
-
-  filters = {
-    region = "us-east-1"
-  }
-
-  group_by = ["service", "account"]
+# Monthly cost for the first quarter, narrowed to one region.
+data "costfluent_cost_data" "eu_west_q1" {
+  start_date  = "2026-01-01"
+  end_date    = "2026-03-31"
+  granularity = "Month"
+  filter      = "region = 'eu-west-1'"
 }
 
-output "us_east_total" {
-  value = data.costfluent_cost_data.us_east_q1.totals.effective_cost
+output "eu_west_total" {
+  value = data.costfluent_cost_data.eu_west_q1.total_cost
 }
 ```
 
@@ -61,54 +51,32 @@ output "us_east_total" {
 
 ### Required
 
-- `date_range` (Attributes) Date range for the query. (see [below for nested schema](#nestedatt--date_range))
+- `end_date` (String) Last day of the window (YYYY-MM-DD).
+- `start_date` (String) First day of the window (YYYY-MM-DD).
 
 ### Optional
 
-- `filters` (Map of String) Filters to apply to the query.
-- `group_by` (List of String) Dimensions to group by (e.g., service, region, account).
-- `limit` (Number) Maximum number of rows to return.
-- `metrics` (List of String) Metrics to include (billed_cost, effective_cost, list_cost).
-- `workspace_id` (String) Workspace token. Uses provider default if not specified.
+- `filter` (String) Cost filter expression.
+- `granularity` (String) Period each row covers: Day, Week, Month or Quarter. Defaults to Day.
+- `group_by` (String) Cost dimension to group by, such as Service or Region.
+- `limit` (Number) Maximum number of rows to return (1-1000). Defaults to 100.
+- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified, and the whole organization when neither is set.
 
 ### Read-Only
 
-- `currency` (String) Currency code for the results.
-- `data` (Attributes List) Query result rows. (see [below for nested schema](#nestedatt--data))
-- `totals` (Attributes) Aggregated totals. (see [below for nested schema](#nestedatt--totals))
-
-<a id="nestedatt--date_range"></a>
-### Nested Schema for `date_range`
-
-Required:
-
-- `type` (String) Date range type: relative or absolute.
-
-Optional:
-
-- `end_date` (String) End date for absolute type (YYYY-MM-DD).
-- `period` (String) Period preset for relative type (e.g., last_7_days, last_30_days, this_month).
-- `start_date` (String) Start date for absolute type (YYYY-MM-DD).
-
+- `currency` (String) Currency of the total.
+- `data` (Attributes List) Cost rows. (see [below for nested schema](#nestedatt--data))
+- `total_cost` (Number) Total cost across every row that matches.
+- `total_records` (Number) Number of rows that match, beyond the limit too.
 
 <a id="nestedatt--data"></a>
 ### Nested Schema for `data`
 
 Read-Only:
 
-- `billed_cost` (Number) Billed cost.
-- `dimensions` (Map of String) Dimension values for this row.
-- `effective_cost` (Number) Effective cost (after discounts).
-- `list_cost` (Number) List cost (before discounts).
-
-
-<a id="nestedatt--totals"></a>
-### Nested Schema for `totals`
-
-Read-Only:
-
-- `billed_cost` (Number) Total billed cost.
-- `effective_cost` (Number) Total effective cost.
-- `list_cost` (Number) Total list cost.
-- `savings` (Number) Total savings.
-- `savings_percent` (Number) Savings percentage.
+- `amortized_cost` (Number) Amortized cost.
+- `cost` (Number) Cost.
+- `currency` (String) Currency of the row.
+- `date` (String) First day of the period the row covers.
+- `dimensions` (Map of String) Group values for this row.
+- `list_cost` (Number) Cost at list prices.

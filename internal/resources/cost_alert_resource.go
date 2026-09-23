@@ -2,14 +2,18 @@ package resources
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
-	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -27,21 +31,21 @@ type CostAlertResource struct {
 }
 
 type CostAlertResourceModel struct {
-	ID              types.String  `tfsdk:"id"`
-	WorkspaceID     types.String  `tfsdk:"workspace_id"`
-	Name            types.String  `tfsdk:"name"`
-	Description     types.String  `tfsdk:"description"`
-	Type            types.String  `tfsdk:"type"`
-	Metric          types.String  `tfsdk:"metric"`
-	Operator        types.String  `tfsdk:"operator"`
-	ThresholdValue  types.Float64 `tfsdk:"threshold_value"`
-	Period          types.String  `tfsdk:"period"`
-	Channels        types.List    `tfsdk:"channels"`
-	IsPaused        types.Bool    `tfsdk:"is_paused"`
-	Status          types.String  `tfsdk:"status"`
-	LastTriggeredAt types.String  `tfsdk:"last_triggered_at"`
-	CreatedAt       types.String  `tfsdk:"created_at"`
-	UpdatedAt       types.String  `tfsdk:"updated_at"`
+	ID                         types.String  `tfsdk:"id"`
+	WorkspaceID                types.String  `tfsdk:"workspace_id"`
+	Name                       types.String  `tfsdk:"name"`
+	ThresholdType              types.String  `tfsdk:"threshold_type"`
+	ThresholdValue             types.Float64 `tfsdk:"threshold_value"`
+	ComparisonPeriod           types.String  `tfsdk:"comparison_period"`
+	ProviderIDs                types.List    `tfsdk:"provider_ids"`
+	Filter                     types.String  `tfsdk:"filter"`
+	AppIDs                     types.List    `tfsdk:"app_ids"`
+	EvaluationFrequencyMinutes types.Int64   `tfsdk:"evaluation_frequency_minutes"`
+	IsPaused                   types.Bool    `tfsdk:"is_paused"`
+	Status                     types.String  `tfsdk:"status"`
+	LastEvaluatedAt            types.String  `tfsdk:"last_evaluated_at"`
+	CreatedAt                  types.String  `tfsdk:"created_at"`
+	UpdatedAt                  types.String  `tfsdk:"updated_at"`
 }
 
 func NewCostAlertResource() resource.Resource {
@@ -54,18 +58,22 @@ func (r *CostAlertResource) Metadata(_ context.Context, req resource.MetadataReq
 
 func (r *CostAlertResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Costfluent cost alert.",
+		Description: "Manages a Costfluent cost alert: a threshold on a workspace's cost, optionally narrowed " +
+			"to providers and a filter, that notifies the linked apps when it is crossed.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
-				Description: "Cost alert token.",
+				Description: "Cost alert ID.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"workspace_id": schema.StringAttribute{
 				Optional:    true,
-				Description: "Workspace token. Uses provider default if not specified.",
+				Description: "Workspace ID. Uses the provider's workspace if not specified.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 				Validators: []validator.String{
 					validators.TokenPrefix("wsp_"),
 				},
@@ -74,52 +82,93 @@ func (r *CostAlertResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Required:    true,
 				Description: "Alert name.",
 			},
-			"description": schema.StringAttribute{
-				Optional:    true,
-				Description: "Alert description.",
-			},
-			"type": schema.StringAttribute{
-				Required:    true,
-				Description: "Alert type (threshold, anomaly, forecast).",
-			},
-			"metric": schema.StringAttribute{
-				Required:    true,
-				Description: "Metric to monitor (e.g., billed_cost, effective_cost).",
-			},
-			"operator": schema.StringAttribute{
-				Required:    true,
-				Description: "Comparison operator (gt, gte, lt, lte).",
+			"threshold_type": schema.StringAttribute{
+				Required: true,
+				Description: "What the threshold measures: absolute (a cost amount), percentageIncrease (growth " +
+					"against comparison_period), budgetPercentage or tagCoverageBelow.",
+				Validators: []validator.String{
+					stringvalidator.OneOf(
+						costfluent.CostAlertThresholdAbsolute,
+						costfluent.CostAlertThresholdPercentageIncrease,
+						costfluent.CostAlertThresholdBudgetPercentage,
+						costfluent.CostAlertThresholdTagCoverageBelow,
+					),
+				},
 			},
 			"threshold_value": schema.Float64Attribute{
 				Required:    true,
-				Description: "Threshold value for the alert.",
+				Description: "Threshold, in the unit threshold_type names. Must be greater than zero.",
 			},
-			"period": schema.StringAttribute{
-				Optional:    true,
-				Description: "Time period for the condition (e.g., daily, weekly, monthly).",
+			"comparison_period": schema.StringAttribute{
+				Optional: true,
+				Description: "Period a percentageIncrease threshold compares against: previousDay, previousWeek, " +
+					"previousMonth or sameDayLastMonth. Removing it recreates the alert.",
+				Validators: []validator.String{
+					stringvalidator.OneOf(
+						costfluent.CostAlertComparePreviousDay,
+						costfluent.CostAlertComparePreviousWeek,
+						costfluent.CostAlertComparePreviousMonth,
+						costfluent.CostAlertCompareSameDayLastMonth,
+					),
+				},
+				PlanModifiers: []planmodifier.String{
+					requiresReplaceWhenRemoved("comparison_period"),
+				},
 			},
-			"channels": schema.ListAttribute{
+			"provider_ids": schema.ListAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Notification channel tokens.",
+				Description: "Providers whose cost the alert watches. Omit for every provider; emptying it recreates the alert.",
+				PlanModifiers: []planmodifier.List{
+					listRequiresReplaceWhenEmptied("provider_ids"),
+				},
+			},
+			"filter": schema.StringAttribute{
+				Optional:    true,
+				Description: "Cost filter expression narrowing what the alert watches. Removing it recreates the alert.",
+				PlanModifiers: []planmodifier.String{
+					requiresReplaceWhenRemoved("filter"),
+				},
+			},
+			"app_ids": schema.ListAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				Description: "Connected apps the alert notifies. Emptying it recreates the alert.",
+				PlanModifiers: []planmodifier.List{
+					listRequiresReplaceWhenEmptied("app_ids"),
+				},
+			},
+			"evaluation_frequency_minutes": schema.Int64Attribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "How often the alert is evaluated, 15 to 1440 minutes. Defaults to 60.",
+				Validators: []validator.Int64{
+					int64validator.Between(15, 1440),
+				},
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"is_paused": schema.BoolAttribute{
 				Optional:    true,
 				Computed:    true,
 				Default:     booldefault.StaticBool(false),
-				Description: "Whether the alert is paused.",
+				Description: "Whether evaluation is paused.",
 			},
 			"status": schema.StringAttribute{
 				Computed:    true,
-				Description: "Alert status (active, paused).",
+				Description: "Alert status.",
 			},
-			"last_triggered_at": schema.StringAttribute{
+			"last_evaluated_at": schema.StringAttribute{
 				Computed:    true,
-				Description: "Last triggered timestamp.",
+				Description: "When the alert was last evaluated.",
 			},
 			"created_at": schema.StringAttribute{
 				Computed:    true,
 				Description: "Creation timestamp.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"updated_at": schema.StringAttribute{
 				Computed:    true,
@@ -141,13 +190,6 @@ func (r *CostAlertResource) Configure(_ context.Context, req resource.ConfigureR
 	r.client = client
 }
 
-func (r *CostAlertResource) getClient(model *CostAlertResourceModel) *costfluent.Client {
-	if !model.WorkspaceID.IsNull() {
-		return r.client.Workspace(model.WorkspaceID.ValueString())
-	}
-	return r.client
-}
-
 func (r *CostAlertResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan CostAlertResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -155,40 +197,41 @@ func (r *CostAlertResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	client := r.getClient(&plan)
-
-	condition := costfluent.CostAlertCondition{
-		Metric:         plan.Metric.ValueString(),
-		Operator:       plan.Operator.ValueString(),
-		ThresholdValue: plan.ThresholdValue.ValueFloat64(),
-	}
-	if !plan.Period.IsNull() {
-		condition.Period = plan.Period.ValueString()
-	}
-
 	input := &costfluent.CreateCostAlertInput{
-		Name:      plan.Name.ValueString(),
-		Type:      plan.Type.ValueString(),
-		Condition: condition,
+		WorkspaceID:      plan.WorkspaceID.ValueString(),
+		Name:             plan.Name.ValueString(),
+		ThresholdType:    plan.ThresholdType.ValueString(),
+		ThresholdValue:   plan.ThresholdValue.ValueFloat64(),
+		ComparisonPeriod: knownString(plan.ComparisonPeriod),
+		Filter:           knownString(plan.Filter),
+	}
+	if !plan.ProviderIDs.IsNull() {
+		resp.Diagnostics.Append(plan.ProviderIDs.ElementsAs(ctx, &input.ProviderIDs, false)...)
+	}
+	if !plan.AppIDs.IsNull() {
+		resp.Diagnostics.Append(plan.AppIDs.ElementsAs(ctx, &input.AppIDs, false)...)
+	}
+	if !plan.EvaluationFrequencyMinutes.IsNull() && !plan.EvaluationFrequencyMinutes.IsUnknown() {
+		minutes := int(plan.EvaluationFrequencyMinutes.ValueInt64())
+		input.EvaluationFrequencyMinutes = &minutes
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
-	if !plan.Description.IsNull() {
-		desc := plan.Description.ValueString()
-		input.Description = &desc
-	}
-	if !plan.Channels.IsNull() {
-		var channels []string
-		resp.Diagnostics.Append(plan.Channels.ElementsAs(ctx, &channels, false)...)
-		input.Channels = channels
-	}
-
-	alert, err := client.CreateCostAlert(ctx, input)
+	alert, err := r.client.CreateCostAlert(ctx, input)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create cost alert", err.Error())
 		return
 	}
+	if plan.IsPaused.ValueBool() {
+		if alert, err = r.setPaused(ctx, plan.WorkspaceID.ValueString(), alert.ID, true); err != nil {
+			resp.Diagnostics.AddError("Failed to pause cost alert", err.Error())
+			return
+		}
+	}
 
-	mapCostAlertToModel(alert, &plan)
+	resp.Diagnostics.Append(mapCostAlertToModel(ctx, alert, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -199,8 +242,7 @@ func (r *CostAlertResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	client := r.getClient(&state)
-	alert, err := client.GetCostAlert(ctx, state.ID.ValueString())
+	alert, err := r.client.GetCostAlert(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -210,7 +252,7 @@ func (r *CostAlertResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	mapCostAlertToModel(alert, &state)
+	resp.Diagnostics.Append(mapCostAlertToModel(ctx, alert, &state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
@@ -222,74 +264,64 @@ func (r *CostAlertResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	client := r.getClient(&state)
+	workspaceID, id := state.WorkspaceID.ValueString(), state.ID.ValueString()
 	input := &costfluent.UpdateCostAlertInput{}
-
 	if !plan.Name.Equal(state.Name) {
-		name := plan.Name.ValueString()
-		input.Name = &name
+		input.Name = plan.Name.ValueStringPointer()
 	}
-	if !plan.Description.Equal(state.Description) {
-		if plan.Description.IsNull() {
-			empty := ""
-			input.Description = &empty
-		} else {
-			desc := plan.Description.ValueString()
-			input.Description = &desc
-		}
+	if !plan.ThresholdType.Equal(state.ThresholdType) {
+		input.ThresholdType = plan.ThresholdType.ValueStringPointer()
 	}
-
-	// Update condition if any field changed
-	if !plan.Metric.Equal(state.Metric) || !plan.Operator.Equal(state.Operator) ||
-		!plan.ThresholdValue.Equal(state.ThresholdValue) || !plan.Period.Equal(state.Period) {
-		condition := costfluent.CostAlertCondition{
-			Metric:         plan.Metric.ValueString(),
-			Operator:       plan.Operator.ValueString(),
-			ThresholdValue: plan.ThresholdValue.ValueFloat64(),
-		}
-		if !plan.Period.IsNull() {
-			condition.Period = plan.Period.ValueString()
-		}
-		input.Condition = &condition
+	if !plan.ThresholdValue.Equal(state.ThresholdValue) {
+		input.ThresholdValue = plan.ThresholdValue.ValueFloat64Pointer()
 	}
-
-	if !plan.Channels.Equal(state.Channels) {
-		if !plan.Channels.IsNull() {
-			var channels []string
-			resp.Diagnostics.Append(plan.Channels.ElementsAs(ctx, &channels, false)...)
-			input.Channels = channels
-		}
+	if !plan.ComparisonPeriod.Equal(state.ComparisonPeriod) {
+		input.ComparisonPeriod = knownString(plan.ComparisonPeriod)
+	}
+	if !plan.Filter.Equal(state.Filter) {
+		input.Filter = knownString(plan.Filter)
+	}
+	if !plan.ProviderIDs.Equal(state.ProviderIDs) && !plan.ProviderIDs.IsNull() {
+		resp.Diagnostics.Append(plan.ProviderIDs.ElementsAs(ctx, &input.ProviderIDs, false)...)
+	}
+	if !plan.AppIDs.Equal(state.AppIDs) && !plan.AppIDs.IsNull() {
+		resp.Diagnostics.Append(plan.AppIDs.ElementsAs(ctx, &input.AppIDs, false)...)
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if !plan.EvaluationFrequencyMinutes.IsUnknown() && !plan.EvaluationFrequencyMinutes.Equal(state.EvaluationFrequencyMinutes) {
+		minutes := int(plan.EvaluationFrequencyMinutes.ValueInt64())
+		input.EvaluationFrequencyMinutes = &minutes
 	}
 
-	alert, err := client.UpdateCostAlert(ctx, state.ID.ValueString(), input)
+	alert, err := r.client.UpdateCostAlert(ctx, workspaceID, id, input)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update cost alert", err.Error())
 		return
 	}
-
-	// Handle pause/resume separately
 	if !plan.IsPaused.Equal(state.IsPaused) {
-		if plan.IsPaused.ValueBool() {
-			if err := client.PauseCostAlert(ctx, alert.Token); err != nil {
-				resp.Diagnostics.AddError("Failed to pause cost alert", err.Error())
-				return
-			}
-		} else {
-			if err := client.ResumeCostAlert(ctx, alert.Token); err != nil {
-				resp.Diagnostics.AddError("Failed to resume cost alert", err.Error())
-				return
-			}
-		}
-		// Re-fetch to get updated status
-		alert, err = client.GetCostAlert(ctx, alert.Token)
-		if err != nil {
-			resp.Diagnostics.AddError("Failed to read cost alert after pause/resume", err.Error())
+		if alert, err = r.setPaused(ctx, workspaceID, id, plan.IsPaused.ValueBool()); err != nil {
+			resp.Diagnostics.AddError("Failed to change cost alert pause state", err.Error())
 			return
 		}
 	}
 
-	mapCostAlertToModel(alert, &plan)
+	resp.Diagnostics.Append(mapCostAlertToModel(ctx, alert, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+}
+
+func (r *CostAlertResource) setPaused(ctx context.Context, workspaceID, id string, paused bool) (*costfluent.CostAlert, error) {
+	var err error
+	if paused {
+		err = r.client.PauseCostAlert(ctx, workspaceID, id)
+	} else {
+		err = r.client.ResumeCostAlert(ctx, workspaceID, id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.client.GetCostAlert(ctx, workspaceID, id)
 }
 
 func (r *CostAlertResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -299,8 +331,7 @@ func (r *CostAlertResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	client := r.getClient(&state)
-	err := client.DeleteCostAlert(ctx, state.ID.ValueString())
+	err := r.client.DeleteCostAlert(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		return
 	}
@@ -309,39 +340,47 @@ func (r *CostAlertResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 }
 
+// ImportState takes "<workspace ID>:<ID>", or a bare ID in the provider's workspace.
 func (r *CostAlertResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importOptionallyWorkspaceScoped(ctx, req, resp)
 }
 
-func mapCostAlertToModel(a *costfluent.CostAlert, model *CostAlertResourceModel) {
-	model.ID = types.StringValue(a.Token)
+func mapCostAlertToModel(ctx context.Context, a *costfluent.CostAlert, model *CostAlertResourceModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	model.ID = types.StringValue(a.ID)
 	model.Name = types.StringValue(a.Name)
-	model.Type = types.StringValue(a.Type)
-	model.Metric = types.StringValue(a.Condition.Metric)
-	model.Operator = types.StringValue(a.Condition.Operator)
-	model.ThresholdValue = types.Float64Value(a.Condition.ThresholdValue)
+	model.ThresholdType = sameEnum(model.ThresholdType, a.ThresholdType)
+	model.ThresholdValue = types.Float64Value(a.ThresholdValue)
+	if a.ComparisonPeriod != nil {
+		model.ComparisonPeriod = sameEnum(model.ComparisonPeriod, *a.ComparisonPeriod)
+	} else {
+		model.ComparisonPeriod = types.StringNull()
+	}
+	model.Filter = types.StringPointerValue(a.Filter)
+	model.EvaluationFrequencyMinutes = types.Int64Value(int64(a.EvaluationFrequencyMinutes))
 	model.Status = types.StringValue(a.Status)
-	model.IsPaused = types.BoolValue(a.Status == "paused")
+	model.IsPaused = types.BoolValue(strings.EqualFold(a.Status, "paused"))
 	model.CreatedAt = types.StringValue(a.CreatedAt.Format(time.RFC3339))
+	model.LastEvaluatedAt = optionalTime(a.LastEvaluatedAt)
+	model.UpdatedAt = optionalTime(a.UpdatedAt)
 
-	if a.Condition.Period != "" {
-		model.Period = types.StringValue(a.Condition.Period)
-	} else {
-		model.Period = types.StringNull()
+	// An omitted list and an empty one mean the same to the API; keep whichever was configured.
+	if len(a.ProviderIDs) > 0 || !model.ProviderIDs.IsNull() {
+		list, d := types.ListValueFrom(ctx, types.StringType, a.ProviderIDs)
+		diags.Append(d...)
+		model.ProviderIDs = list
 	}
-	if a.Description != nil {
-		model.Description = types.StringValue(*a.Description)
-	} else {
-		model.Description = types.StringNull()
+	if len(a.AppIDs) > 0 || !model.AppIDs.IsNull() {
+		list, d := types.ListValueFrom(ctx, types.StringType, a.AppIDs)
+		diags.Append(d...)
+		model.AppIDs = list
 	}
-	if a.LastTriggeredAt != nil {
-		model.LastTriggeredAt = types.StringValue(a.LastTriggeredAt.Format(time.RFC3339))
-	} else {
-		model.LastTriggeredAt = types.StringNull()
+	return diags
+}
+
+func optionalTime(t *time.Time) types.String {
+	if t == nil {
+		return types.StringNull()
 	}
-	if a.UpdatedAt != nil {
-		model.UpdatedAt = types.StringValue(a.UpdatedAt.Format(time.RFC3339))
-	} else {
-		model.UpdatedAt = types.StringNull()
-	}
+	return types.StringValue(t.Format(time.RFC3339))
 }

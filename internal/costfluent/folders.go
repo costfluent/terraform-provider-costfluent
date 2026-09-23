@@ -2,76 +2,42 @@ package costfluent
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"time"
+	"net/url"
 )
 
-// Folder represents a folder for organizing resources
+// Folder organizes a workspace's cost reports. Folders nest; Children holds the folders directly
+// inside this one.
 type Folder struct {
-	Token          string     `json:"token"`
-	Name           string     `json:"name"`
-	Description    *string    `json:"description,omitempty"`
-	ParentToken    *string    `json:"parent_token,omitempty"`
-	WorkspaceToken string     `json:"workspace_token"`
-	Path           string     `json:"path"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	ParentID    *string  `json:"parentId,omitempty"`
+	ReportCount int      `json:"reportCount"`
+	Children    []Folder `json:"children,omitempty"`
 }
 
-// FoldersListResponse is the response for listing folders
-type FoldersListResponse = ListResponse[Folder]
+// FolderList is the listing shape: the workspace's folder tree
+type FolderList struct {
+	Folders []Folder `json:"folders"`
+}
 
-// ListFolders returns paginated folders
-func (c *Client) ListFolders(ctx context.Context, opts *PageOptions) (*FoldersListResponse, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/folders", nil)
+// ListFolders returns a workspace's folders
+func (c *Client) ListFolders(ctx context.Context, workspaceID string) (*FolderList, error) {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/folders", workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	if opts != nil {
-		q := req.URL.Query()
-		if opts.Page > 0 {
-			q.Set("page", fmt.Sprint(opts.Page))
-		}
-		if opts.Limit > 0 {
-			q.Set("limit", fmt.Sprint(opts.Limit))
-		}
-		req.URL.RawQuery = q.Encode()
-	}
-
-	var resp FoldersListResponse
-	if err := c.do(req, &resp); err != nil {
+	var list FolderList
+	if err := c.do(req, &list); err != nil {
 		return nil, err
 	}
-	return &resp, nil
+	return &list, nil
 }
 
-// ListAllFolders fetches all folders across all pages
-func (c *Client) ListAllFolders(ctx context.Context, pageSize int) ([]Folder, error) {
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-
-	var all []Folder
-	page := 1
-	for {
-		resp, err := c.ListFolders(ctx, &PageOptions{Page: page, Limit: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, resp.Data...)
-		if !resp.Links.HasNextPage() || len(resp.Data) == 0 {
-			break
-		}
-		page++
-	}
-	return all, nil
-}
-
-// GetFolder returns a single folder by token
-func (c *Client) GetFolder(ctx context.Context, token string) (*Folder, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/folders/"+token, nil)
+// GetFolder returns a single folder by ID
+func (c *Client) GetFolder(ctx context.Context, workspaceID, id string) (*Folder, error) {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/folders/"+url.PathEscape(id), workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -83,37 +49,49 @@ func (c *Client) GetFolder(ctx context.Context, token string) (*Folder, error) {
 	return &folder, nil
 }
 
-// CreateFolderInput for creating a new folder
+// CreateFolderInput for creating a new folder. WorkspaceID falls back to the client's default
+// workspace.
 type CreateFolderInput struct {
-	Name        string  `json:"name"`
-	Description *string `json:"description,omitempty"`
-	ParentToken *string `json:"parent_token,omitempty"`
+	WorkspaceID string  `json:"workspaceId"`
+	Title       string  `json:"title"`
+	ParentID    *string `json:"parentId,omitempty"`
 }
 
-// CreateFolder creates a new folder
+// CreateFolder creates a new folder and returns it as stored
 func (c *Client) CreateFolder(ctx context.Context, input *CreateFolderInput) (*Folder, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/folders", input)
+	body := *input
+	var err error
+	if body.WorkspaceID, err = c.requireWorkspace(body.WorkspaceID); err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/folders", &body)
 	if err != nil {
 		return nil, err
 	}
 
-	var folder Folder
-	if err := c.do(req, &folder); err != nil {
+	var created createdRef
+	if err := c.do(req, &created); err != nil {
 		return nil, err
 	}
-	return &folder, nil
+	return c.GetFolder(ctx, body.WorkspaceID, created.ID)
 }
 
-// UpdateFolderInput for updating a folder
+// UpdateFolderInput for renaming or moving a folder; unset fields are left as they are.
+// WorkspaceID falls back to the client's default workspace.
 type UpdateFolderInput struct {
-	Name        *string `json:"name,omitempty"`
-	Description *string `json:"description,omitempty"`
-	ParentToken *string `json:"parent_token,omitempty"`
+	WorkspaceID string  `json:"workspaceId"`
+	Title       *string `json:"title,omitempty"`
+	ParentID    *string `json:"parentId,omitempty"`
 }
 
 // UpdateFolder updates an existing folder
-func (c *Client) UpdateFolder(ctx context.Context, token string, input *UpdateFolderInput) (*Folder, error) {
-	req, err := c.newRequest(ctx, http.MethodPatch, "/api/v1/folders/"+token, input)
+func (c *Client) UpdateFolder(ctx context.Context, id string, input *UpdateFolderInput) (*Folder, error) {
+	body := *input
+	var err error
+	if body.WorkspaceID, err = c.requireWorkspace(body.WorkspaceID); err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(ctx, http.MethodPut, "/v1/folders/"+url.PathEscape(id), &body)
 	if err != nil {
 		return nil, err
 	}
@@ -126,8 +104,8 @@ func (c *Client) UpdateFolder(ctx context.Context, token string, input *UpdateFo
 }
 
 // DeleteFolder removes a folder
-func (c *Client) DeleteFolder(ctx context.Context, token string) error {
-	req, err := c.newRequest(ctx, http.MethodDelete, "/api/v1/folders/"+token, nil)
+func (c *Client) DeleteFolder(ctx context.Context, workspaceID, id string) error {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodDelete, "/v1/folders/"+url.PathEscape(id), workspaceID, nil)
 	if err != nil {
 		return err
 	}

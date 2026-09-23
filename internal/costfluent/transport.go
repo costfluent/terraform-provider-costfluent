@@ -33,10 +33,26 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any) 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
-	if c.workspaceID != "" {
-		req.Header.Set("X-Workspace-Id", c.workspaceID)
-	}
 
+	return req, nil
+}
+
+// newWorkspaceRequest is newRequest for an operation the API scopes by the workspaceId query
+// parameter.
+func (c *Client) newWorkspaceRequest(
+	ctx context.Context, method, path, workspaceID string, body any,
+) (*http.Request, error) {
+	id, err := c.requireWorkspace(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(ctx, method, path, body)
+	if err != nil {
+		return nil, err
+	}
+	q := req.URL.Query()
+	q.Set("workspaceId", id)
+	req.URL.RawQuery = q.Encode()
 	return req, nil
 }
 
@@ -46,7 +62,7 @@ func (c *Client) do(req *http.Request, v any) error {
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return parseError(resp)
@@ -58,28 +74,6 @@ func (c *Client) do(req *http.Request, v any) error {
 		}
 	}
 	return nil
-}
-
-// doRaw executes the request and returns the response body unparsed.
-//
-// Used for artifact downloads: a report's stored file is CSV or a workbook, not JSON, and decoding
-// it as JSON would turn a successful download into a parse error.
-func (c *Client) doRaw(req *http.Request) ([]byte, error) {
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return nil, parseError(resp)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
-	}
-	return body, nil
 }
 
 // authTransport adds Authorization header
@@ -104,6 +98,10 @@ type retryTransport struct {
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !retryable(req.Method) {
+		return t.base.RoundTrip(req)
+	}
+
 	maxRetries := t.maxRetries
 	if maxRetries == 0 {
 		maxRetries = 3
@@ -117,49 +115,53 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		maxDelay = 30 * time.Second
 	}
 
-	var lastErr error
 	var bodyBytes []byte
-
-	// Read body once for potential retries
 	if req.Body != nil {
-		bodyBytes, _ = io.ReadAll(req.Body)
-		req.Body.Close()
+		var err error
+		bodyBytes, err = io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("reading request body: %w", err)
+		}
 	}
 
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		// Reset body for each attempt
+	for attempt := 0; ; attempt++ {
 		if bodyBytes != nil {
 			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		}
 
 		resp, err := t.base.RoundTrip(req)
+		last := attempt >= maxRetries
 		if err != nil {
-			lastErr = err
-			if attempt < maxRetries {
-				time.Sleep(t.calculateDelay(attempt, baseDelay, maxDelay, nil))
-				continue
+			if last {
+				return nil, err
 			}
-			break
-		}
-
-		// Don't retry client errors (except 429)
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 429 {
+		} else if last || (resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500) {
 			return resp, nil
 		}
 
-		// Retry server errors and rate limits
-		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			resp.Body.Close()
-			if attempt < maxRetries {
-				time.Sleep(t.calculateDelay(attempt, baseDelay, maxDelay, resp))
-				continue
-			}
+		delay := t.calculateDelay(attempt, baseDelay, maxDelay, resp)
+		if resp != nil {
+			_ = resp.Body.Close()
 		}
-
-		return resp, nil
+		timer := time.NewTimer(delay)
+		select {
+		case <-req.Context().Done():
+			timer.Stop()
+			return nil, req.Context().Err()
+		case <-timer.C:
+		}
 	}
+}
 
-	return nil, lastErr
+// retryable reports whether a method is safe to resend: POST creates and triggers, so a retry
+// after a lost response could run it twice.
+func retryable(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete:
+		return true
+	}
+	return false
 }
 
 func (t *retryTransport) calculateDelay(attempt int, baseDelay, maxDelay time.Duration, resp *http.Response) time.Duration {

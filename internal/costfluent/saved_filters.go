@@ -2,43 +2,30 @@ package costfluent
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
-// SavedFilter represents a saved filter configuration
+// SavedFilter is a named cost filter expression
 type SavedFilter struct {
-	Token          string         `json:"token"`
-	Name           string         `json:"name"`
-	Description    *string        `json:"description,omitempty"`
-	WorkspaceToken string         `json:"workspace_token"`
-	Filters        map[string]any `json:"filters"`
-	IsDefault      bool           `json:"is_default"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      *time.Time     `json:"updated_at,omitempty"`
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Filter    string    `json:"filter"`
+	IsDefault bool      `json:"isDefault"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // SavedFiltersListResponse is the response for listing saved filters
 type SavedFiltersListResponse = ListResponse[SavedFilter]
 
 // ListSavedFilters returns paginated saved filters
-func (c *Client) ListSavedFilters(ctx context.Context, opts *PageOptions) (*SavedFiltersListResponse, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/saved-filters", nil)
+func (c *Client) ListSavedFilters(ctx context.Context, workspaceID string, opts *PageOptions) (*SavedFiltersListResponse, error) {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/saved-filters", workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	if opts != nil {
-		q := req.URL.Query()
-		if opts.Page > 0 {
-			q.Set("page", fmt.Sprint(opts.Page))
-		}
-		if opts.Limit > 0 {
-			q.Set("limit", fmt.Sprint(opts.Limit))
-		}
-		req.URL.RawQuery = q.Encode()
-	}
+	opts.apply(req)
 
 	var resp SavedFiltersListResponse
 	if err := c.do(req, &resp); err != nil {
@@ -48,30 +35,15 @@ func (c *Client) ListSavedFilters(ctx context.Context, opts *PageOptions) (*Save
 }
 
 // ListAllSavedFilters fetches all saved filters across all pages
-func (c *Client) ListAllSavedFilters(ctx context.Context, pageSize int) ([]SavedFilter, error) {
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-
-	var all []SavedFilter
-	page := 1
-	for {
-		resp, err := c.ListSavedFilters(ctx, &PageOptions{Page: page, Limit: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, resp.Data...)
-		if !resp.Links.HasNextPage() || len(resp.Data) == 0 {
-			break
-		}
-		page++
-	}
-	return all, nil
+func (c *Client) ListAllSavedFilters(ctx context.Context, workspaceID string, pageSize int) ([]SavedFilter, error) {
+	return listAll(pageSize, func(p *PageOptions) (*ListResponse[SavedFilter], error) {
+		return c.ListSavedFilters(ctx, workspaceID, p)
+	})
 }
 
-// GetSavedFilter returns a single saved filter by token
-func (c *Client) GetSavedFilter(ctx context.Context, token string) (*SavedFilter, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/saved-filters/"+token, nil)
+// GetSavedFilter returns a single saved filter by ID
+func (c *Client) GetSavedFilter(ctx context.Context, workspaceID, id string) (*SavedFilter, error) {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/saved-filters/"+url.PathEscape(id), workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -83,39 +55,44 @@ func (c *Client) GetSavedFilter(ctx context.Context, token string) (*SavedFilter
 	return &filter, nil
 }
 
-// CreateSavedFilterInput for creating a new saved filter
+// CreateSavedFilterInput for creating a new saved filter. WorkspaceID falls back to the client's
+// default workspace.
 type CreateSavedFilterInput struct {
-	Name        string         `json:"name"`
-	Description *string        `json:"description,omitempty"`
-	Filters     map[string]any `json:"filters"`
-	IsDefault   bool           `json:"is_default,omitempty"`
+	WorkspaceID string `json:"workspaceId"`
+	Title       string `json:"title"`
+	Filter      string `json:"filter"`
+	IsDefault   bool   `json:"isDefault,omitempty"`
 }
 
-// CreateSavedFilter creates a new saved filter
+// CreateSavedFilter creates a new saved filter and returns it as stored
 func (c *Client) CreateSavedFilter(ctx context.Context, input *CreateSavedFilterInput) (*SavedFilter, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/saved-filters", input)
+	body := *input
+	var err error
+	if body.WorkspaceID, err = c.requireWorkspace(body.WorkspaceID); err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/saved-filters", &body)
 	if err != nil {
 		return nil, err
 	}
 
-	var filter SavedFilter
-	if err := c.do(req, &filter); err != nil {
+	var created createdRef
+	if err := c.do(req, &created); err != nil {
 		return nil, err
 	}
-	return &filter, nil
+	return c.GetSavedFilter(ctx, body.WorkspaceID, created.ID)
 }
 
-// UpdateSavedFilterInput for updating a saved filter
+// UpdateSavedFilterInput for updating a saved filter; unset fields are left as they are
 type UpdateSavedFilterInput struct {
-	Name        *string        `json:"name,omitempty"`
-	Description *string        `json:"description,omitempty"`
-	Filters     map[string]any `json:"filters,omitempty"`
-	IsDefault   *bool          `json:"is_default,omitempty"`
+	Title     *string `json:"title,omitempty"`
+	Filter    *string `json:"filter,omitempty"`
+	IsDefault *bool   `json:"isDefault,omitempty"`
 }
 
 // UpdateSavedFilter updates an existing saved filter
-func (c *Client) UpdateSavedFilter(ctx context.Context, token string, input *UpdateSavedFilterInput) (*SavedFilter, error) {
-	req, err := c.newRequest(ctx, http.MethodPatch, "/api/v1/saved-filters/"+token, input)
+func (c *Client) UpdateSavedFilter(ctx context.Context, workspaceID, id string, input *UpdateSavedFilterInput) (*SavedFilter, error) {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodPut, "/v1/saved-filters/"+url.PathEscape(id), workspaceID, input)
 	if err != nil {
 		return nil, err
 	}
@@ -128,8 +105,8 @@ func (c *Client) UpdateSavedFilter(ctx context.Context, token string, input *Upd
 }
 
 // DeleteSavedFilter removes a saved filter
-func (c *Client) DeleteSavedFilter(ctx context.Context, token string) error {
-	req, err := c.newRequest(ctx, http.MethodDelete, "/api/v1/saved-filters/"+token, nil)
+func (c *Client) DeleteSavedFilter(ctx context.Context, workspaceID, id string) error {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodDelete, "/v1/saved-filters/"+url.PathEscape(id), workspaceID, nil)
 	if err != nil {
 		return err
 	}

@@ -9,14 +9,15 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 
 var (
@@ -30,46 +31,28 @@ type BudgetResource struct {
 }
 
 type BudgetResourceModel struct {
-	ID            types.String  `tfsdk:"id"`
-	WorkspaceID   types.String  `tfsdk:"workspace_id"`
-	Name          types.String  `tfsdk:"name"`
-	Description   types.String  `tfsdk:"description"`
-	Amount        types.Float64 `tfsdk:"amount"`
-	Currency      types.String  `tfsdk:"currency"`
-	Period        types.String  `tfsdk:"period"`
-	StartDate     types.String  `tfsdk:"start_date"`
-	EndDate       types.String  `tfsdk:"end_date"`
-	Filters       types.Object  `tfsdk:"filters"`
-	Alerts        types.List    `tfsdk:"alerts"`
-	CurrentSpend  types.Float64 `tfsdk:"current_spend"`
-	ForecastSpend types.Float64 `tfsdk:"forecast_spend"`
-	Status        types.String  `tfsdk:"status"`
-	CreatedAt     types.String  `tfsdk:"created_at"`
-	UpdatedAt     types.String  `tfsdk:"updated_at"`
-}
-
-type BudgetFiltersModel struct {
-	ProviderTokens types.List `tfsdk:"provider_tokens"`
-	Services       types.List `tfsdk:"services"`
-	Regions        types.List `tfsdk:"regions"`
-	Tags           types.Map  `tfsdk:"tags"`
+	ID                types.String  `tfsdk:"id"`
+	WorkspaceID       types.String  `tfsdk:"workspace_id"`
+	Name              types.String  `tfsdk:"name"`
+	Amount            types.Float64 `tfsdk:"amount"`
+	Currency          types.String  `tfsdk:"currency"`
+	Period            types.String  `tfsdk:"period"`
+	SegmentID         types.String  `tfsdk:"segment_id"`
+	Alerts            types.List    `tfsdk:"alerts"`
+	CurrentSpend      types.Float64 `tfsdk:"current_spend"`
+	PercentUsed       types.Float64 `tfsdk:"percent_used"`
+	SpendAvailability types.String  `tfsdk:"spend_availability"`
+	Status            types.String  `tfsdk:"status"`
+	CreatedAt         types.String  `tfsdk:"created_at"`
+	UpdatedAt         types.String  `tfsdk:"updated_at"`
 }
 
 type BudgetAlertModel struct {
 	ThresholdPercent types.Int64 `tfsdk:"threshold_percent"`
-	Channels         types.List  `tfsdk:"channels"`
-}
-
-var budgetFiltersAttrTypes = map[string]attr.Type{
-	"provider_tokens": types.ListType{ElemType: types.StringType},
-	"services":        types.ListType{ElemType: types.StringType},
-	"regions":         types.ListType{ElemType: types.StringType},
-	"tags":            types.MapType{ElemType: types.StringType},
 }
 
 var budgetAlertAttrTypes = map[string]attr.Type{
 	"threshold_percent": types.Int64Type,
-	"channels":          types.ListType{ElemType: types.StringType},
 }
 
 func NewBudgetResource() resource.Resource {
@@ -86,14 +69,17 @@ func (r *BudgetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
-				Description: "Budget token.",
+				Description: "Budget ID.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"workspace_id": schema.StringAttribute{
 				Optional:    true,
-				Description: "Workspace token. Uses provider default if not specified.",
+				Description: "Workspace ID. Uses the provider's workspace if not specified.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 				Validators: []validator.String{
 					validators.TokenPrefix("wsp_"),
 				},
@@ -102,93 +88,67 @@ func (r *BudgetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Required:    true,
 				Description: "Budget name.",
 			},
-			"description": schema.StringAttribute{
-				Optional:    true,
-				Description: "Budget description.",
-			},
 			"amount": schema.Float64Attribute{
 				Required:    true,
 				Description: "Budget amount.",
 			},
 			"currency": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Currency code (ISO 4217). Defaults to workspace currency.",
+				Required:    true,
+				Description: "Currency of the amount (ISO 4217). Changing it recreates the budget.",
+				Validators: []validator.String{
+					stringvalidator.LengthBetween(3, 3),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"period": schema.StringAttribute{
 				Required:    true,
-				Description: "Budget period: monthly, quarterly, or yearly.",
+				Description: "Budget period: Monthly, Quarterly or Yearly. Changing it recreates the budget.",
 				Validators: []validator.String{
-					stringvalidator.OneOf("monthly", "quarterly", "yearly"),
+					stringvalidator.OneOf("Monthly", "Quarterly", "Yearly"),
 				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"start_date": schema.StringAttribute{
-				Required:    true,
-				Description: "Budget start date (YYYY-MM-DD).",
+			"segment_id": schema.StringAttribute{
+				Optional: true,
+				Description: "Allocation segment whose cost the budget tracks. Omit to track the whole workspace; " +
+					"removing it recreates the budget.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
-			},
-			"end_date": schema.StringAttribute{
-				Optional:    true,
-				Description: "Budget end date (YYYY-MM-DD). If not set, budget continues indefinitely.",
-			},
-			"filters": schema.SingleNestedAttribute{
-				Optional:    true,
-				Description: "Budget scope filters.",
-				Attributes: map[string]schema.Attribute{
-					"provider_tokens": schema.ListAttribute{
-						Optional:    true,
-						ElementType: types.StringType,
-						Description: "Filter by provider tokens.",
-					},
-					"services": schema.ListAttribute{
-						Optional:    true,
-						ElementType: types.StringType,
-						Description: "Filter by service names.",
-					},
-					"regions": schema.ListAttribute{
-						Optional:    true,
-						ElementType: types.StringType,
-						Description: "Filter by regions.",
-					},
-					"tags": schema.MapAttribute{
-						Optional:    true,
-						ElementType: types.StringType,
-						Description: "Filter by tags.",
-					},
+					requiresReplaceWhenRemoved("segment_id"),
 				},
 			},
 			"alerts": schema.ListNestedAttribute{
 				Optional:    true,
-				Description: "Budget alerts.",
+				Description: "Alert thresholds. Changing them recreates the budget.",
+				PlanModifiers: []planmodifier.List{
+					listplanmodifier.RequiresReplace(),
+				},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"threshold_percent": schema.Int64Attribute{
 							Required:    true,
-							Description: "Alert threshold percentage (1-200).",
+							Description: "Alert threshold as a percentage of the amount (1-200).",
 							Validators: []validator.Int64{
 								int64validator.Between(1, 200),
 							},
-						},
-						"channels": schema.ListAttribute{
-							Optional:    true,
-							ElementType: types.StringType,
-							Description: "Notification channel tokens.",
 						},
 					},
 				},
 			},
 			"current_spend": schema.Float64Attribute{
 				Computed:    true,
-				Description: "Current spend amount.",
+				Description: "Spend so far in the current period.",
 			},
-			"forecast_spend": schema.Float64Attribute{
+			"percent_used": schema.Float64Attribute{
 				Computed:    true,
-				Description: "Forecasted spend amount.",
+				Description: "current_spend as a percentage of the amount.",
+			},
+			"spend_availability": schema.StringAttribute{
+				Computed:    true,
+				Description: "Whether current_spend is backed by collected cost data yet.",
 			},
 			"status": schema.StringAttribute{
 				Computed:    true,
@@ -197,6 +157,9 @@ func (r *BudgetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"created_at": schema.StringAttribute{
 				Computed:    true,
 				Description: "Creation timestamp.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"updated_at": schema.StringAttribute{
 				Computed:    true,
@@ -218,13 +181,6 @@ func (r *BudgetResource) Configure(_ context.Context, req resource.ConfigureRequ
 	r.client = client
 }
 
-func (r *BudgetResource) getClient(model *BudgetResourceModel) *costfluent.Client {
-	if !model.WorkspaceID.IsNull() {
-		return r.client.Workspace(model.WorkspaceID.ValueString())
-	}
-	return r.client
-}
-
 func (r *BudgetResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan BudgetResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -232,50 +188,32 @@ func (r *BudgetResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	client := r.getClient(&plan)
 	input := &costfluent.CreateBudgetInput{
-		Name:      plan.Name.ValueString(),
-		Amount:    plan.Amount.ValueFloat64(),
-		Period:    plan.Period.ValueString(),
-		StartDate: plan.StartDate.ValueString(),
+		WorkspaceID: plan.WorkspaceID.ValueString(),
+		Name:        plan.Name.ValueString(),
+		Amount:      plan.Amount.ValueFloat64(),
+		Currency:    plan.Currency.ValueString(),
+		Period:      plan.Period.ValueString(),
+		SegmentID:   knownString(plan.SegmentID),
 	}
-
-	if !plan.Description.IsNull() {
-		desc := plan.Description.ValueString()
-		input.Description = &desc
-	}
-	if !plan.Currency.IsNull() {
-		cur := plan.Currency.ValueString()
-		input.Currency = &cur
-	}
-	if !plan.EndDate.IsNull() {
-		end := plan.EndDate.ValueString()
-		input.EndDate = &end
-	}
-
-	if !plan.Filters.IsNull() {
-		var filters BudgetFiltersModel
-		resp.Diagnostics.Append(plan.Filters.As(ctx, &filters, basetypes.ObjectAsOptions{})...)
-		input.Filters = convertFiltersToAPI(ctx, &filters)
-	}
-
-	if !plan.Alerts.IsNull() {
+	if !plan.Alerts.IsNull() && !plan.Alerts.IsUnknown() {
 		var alerts []BudgetAlertModel
 		resp.Diagnostics.Append(plan.Alerts.ElementsAs(ctx, &alerts, false)...)
-		input.Alerts = convertAlertsToAPI(ctx, alerts)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		for _, a := range alerts {
+			input.Alerts = append(input.Alerts, costfluent.BudgetAlertInput{ThresholdPercent: int(a.ThresholdPercent.ValueInt64())})
+		}
 	}
 
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	budget, err := client.CreateBudget(ctx, input)
+	budget, err := r.client.CreateBudget(ctx, input)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create budget", err.Error())
 		return
 	}
 
-	mapBudgetToModel(ctx, budget, &plan, &resp.Diagnostics)
+	resp.Diagnostics.Append(mapBudgetToModel(budget, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -286,8 +224,7 @@ func (r *BudgetResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	client := r.getClient(&state)
-	budget, err := client.GetBudget(ctx, state.ID.ValueString())
+	budget, err := r.client.GetBudget(ctx, state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -297,7 +234,7 @@ func (r *BudgetResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	mapBudgetToModel(ctx, budget, &state, &resp.Diagnostics)
+	resp.Diagnostics.Append(mapBudgetToModel(budget, &state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
@@ -309,61 +246,24 @@ func (r *BudgetResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	client := r.getClient(&state)
 	input := &costfluent.UpdateBudgetInput{}
-
 	if !plan.Name.Equal(state.Name) {
-		name := plan.Name.ValueString()
-		input.Name = &name
-	}
-	if !plan.Description.Equal(state.Description) {
-		if plan.Description.IsNull() {
-			empty := ""
-			input.Description = &empty
-		} else {
-			desc := plan.Description.ValueString()
-			input.Description = &desc
-		}
+		input.Name = plan.Name.ValueStringPointer()
 	}
 	if !plan.Amount.Equal(state.Amount) {
-		amt := plan.Amount.ValueFloat64()
-		input.Amount = &amt
+		input.Amount = plan.Amount.ValueFloat64Pointer()
 	}
-	if !plan.EndDate.Equal(state.EndDate) {
-		if plan.EndDate.IsNull() {
-			empty := ""
-			input.EndDate = &empty
-		} else {
-			end := plan.EndDate.ValueString()
-			input.EndDate = &end
-		}
-	}
-	if !plan.Filters.Equal(state.Filters) {
-		if !plan.Filters.IsNull() {
-			var filters BudgetFiltersModel
-			resp.Diagnostics.Append(plan.Filters.As(ctx, &filters, basetypes.ObjectAsOptions{})...)
-			input.Filters = convertFiltersToAPI(ctx, &filters)
-		}
-	}
-	if !plan.Alerts.Equal(state.Alerts) {
-		if !plan.Alerts.IsNull() {
-			var alerts []BudgetAlertModel
-			resp.Diagnostics.Append(plan.Alerts.ElementsAs(ctx, &alerts, false)...)
-			input.Alerts = convertAlertsToAPI(ctx, alerts)
-		}
+	if !plan.SegmentID.Equal(state.SegmentID) {
+		input.SegmentID = knownString(plan.SegmentID)
 	}
 
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	budget, err := client.UpdateBudget(ctx, state.ID.ValueString(), input)
+	budget, err := r.client.UpdateBudget(ctx, state.ID.ValueString(), input)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update budget", err.Error())
 		return
 	}
 
-	mapBudgetToModel(ctx, budget, &plan, &resp.Diagnostics)
+	resp.Diagnostics.Append(mapBudgetToModel(budget, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -374,8 +274,7 @@ func (r *BudgetResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 
-	client := r.getClient(&state)
-	err := client.DeleteBudget(ctx, state.ID.ValueString())
+	err := r.client.DeleteBudget(ctx, state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		return
 	}
@@ -388,119 +287,34 @@ func (r *BudgetResource) ImportState(ctx context.Context, req resource.ImportSta
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-func convertFiltersToAPI(ctx context.Context, filters *BudgetFiltersModel) *costfluent.BudgetFilters {
-	if filters == nil {
-		return nil
-	}
-	result := &costfluent.BudgetFilters{}
-
-	if !filters.ProviderTokens.IsNull() {
-		var tokens []string
-		filters.ProviderTokens.ElementsAs(ctx, &tokens, false)
-		result.ProviderTokens = tokens
-	}
-	if !filters.Services.IsNull() {
-		var services []string
-		filters.Services.ElementsAs(ctx, &services, false)
-		result.Services = services
-	}
-	if !filters.Regions.IsNull() {
-		var regions []string
-		filters.Regions.ElementsAs(ctx, &regions, false)
-		result.Regions = regions
-	}
-	if !filters.Tags.IsNull() {
-		tags := make(map[string]string)
-		filters.Tags.ElementsAs(ctx, &tags, false)
-		result.Tags = tags
-	}
-	return result
-}
-
-func convertAlertsToAPI(ctx context.Context, alerts []BudgetAlertModel) []costfluent.BudgetAlert {
-	result := make([]costfluent.BudgetAlert, len(alerts))
-	for i, a := range alerts {
-		result[i] = costfluent.BudgetAlert{
-			ThresholdPercent: int(a.ThresholdPercent.ValueInt64()),
-		}
-		if !a.Channels.IsNull() {
-			var channels []string
-			a.Channels.ElementsAs(ctx, &channels, false)
-			result[i].Channels = channels
-		}
-	}
-	return result
-}
-
-func mapBudgetToModel(ctx context.Context, b *costfluent.Budget, model *BudgetResourceModel, diags interface{}) {
-	model.ID = types.StringValue(b.Token)
+// mapBudgetToModel copies what the API returns. The response carries no segment ID, so
+// segment_id stays as configured.
+func mapBudgetToModel(b *costfluent.Budget, model *BudgetResourceModel) diag.Diagnostics {
+	model.ID = types.StringValue(b.ID)
 	model.Name = types.StringValue(b.Name)
 	model.Amount = types.Float64Value(b.Amount)
 	model.Currency = types.StringValue(b.Currency)
 	model.Period = types.StringValue(b.Period)
-	model.StartDate = types.StringValue(b.StartDate)
 	model.CurrentSpend = types.Float64Value(b.CurrentSpend)
-	model.ForecastSpend = types.Float64Value(b.ForecastSpend)
+	model.PercentUsed = types.Float64Value(b.PercentUsed)
+	model.SpendAvailability = types.StringValue(b.SpendAvailability)
 	model.Status = types.StringValue(b.Status)
 	model.CreatedAt = types.StringValue(b.CreatedAt.Format(time.RFC3339))
-
-	if b.Description != nil {
-		model.Description = types.StringValue(*b.Description)
-	} else {
-		model.Description = types.StringNull()
-	}
-	if b.EndDate != nil {
-		model.EndDate = types.StringValue(*b.EndDate)
-	} else {
-		model.EndDate = types.StringNull()
-	}
 	if b.UpdatedAt != nil {
 		model.UpdatedAt = types.StringValue(b.UpdatedAt.Format(time.RFC3339))
 	} else {
 		model.UpdatedAt = types.StringNull()
 	}
 
-	// Map filters
-	if b.Filters != nil {
-		filtersObj, _ := types.ObjectValueFrom(ctx, budgetFiltersAttrTypes, BudgetFiltersModel{
-			ProviderTokens: stringSliceToList(ctx, b.Filters.ProviderTokens),
-			Services:       stringSliceToList(ctx, b.Filters.Services),
-			Regions:        stringSliceToList(ctx, b.Filters.Regions),
-			Tags:           stringMapToMap(ctx, b.Filters.Tags),
-		})
-		model.Filters = filtersObj
-	} else {
-		model.Filters = types.ObjectNull(budgetFiltersAttrTypes)
-	}
-
-	// Map alerts
-	if len(b.Alerts) > 0 {
-		alertModels := make([]BudgetAlertModel, len(b.Alerts))
-		for i, a := range b.Alerts {
-			alertModels[i] = BudgetAlertModel{
-				ThresholdPercent: types.Int64Value(int64(a.ThresholdPercent)),
-				Channels:         stringSliceToList(ctx, a.Channels),
-			}
-		}
-		alertsList, _ := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: budgetAlertAttrTypes}, alertModels)
-		model.Alerts = alertsList
-	} else {
+	if len(b.Alerts) == 0 {
 		model.Alerts = types.ListNull(types.ObjectType{AttrTypes: budgetAlertAttrTypes})
+		return nil
 	}
-}
-
-func stringSliceToList(ctx context.Context, s []string) types.List {
-	if s == nil {
-		return types.ListNull(types.StringType)
+	alerts := make([]BudgetAlertModel, 0, len(b.Alerts))
+	for _, a := range b.Alerts {
+		alerts = append(alerts, BudgetAlertModel{ThresholdPercent: types.Int64Value(int64(a.ThresholdPercent))})
 	}
-	list, _ := types.ListValueFrom(ctx, types.StringType, s)
-	return list
-}
-
-func stringMapToMap(ctx context.Context, m map[string]string) types.Map {
-	if m == nil {
-		return types.MapNull(types.StringType)
-	}
-	tfMap, _ := types.MapValueFrom(ctx, types.StringType, m)
-	return tfMap
+	list, diags := types.ListValueFrom(context.Background(), types.ObjectType{AttrTypes: budgetAlertAttrTypes}, alerts)
+	model.Alerts = list
+	return diags
 }

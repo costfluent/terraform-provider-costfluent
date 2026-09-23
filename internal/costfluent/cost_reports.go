@@ -55,8 +55,9 @@ type CostReportList struct {
 
 // CostReportFolder is one folder in the listing.
 type CostReportFolder struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	ReportCount int    `json:"reportCount"`
 }
 
 // CreateCostReportInput creates a saved cost report.
@@ -96,8 +97,7 @@ type UpdateCostReportInput struct {
 
 // ListCostReports returns a workspace's saved cost reports.
 func (c *Client) ListCostReports(ctx context.Context, workspaceID string) (*CostReportList, error) {
-	req, err := c.newRequest(ctx, http.MethodGet,
-		"/v1/cost-reports?workspaceId="+url.QueryEscape(workspaceID), nil)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/cost-reports", workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -109,10 +109,9 @@ func (c *Client) ListCostReports(ctx context.Context, workspaceID string) (*Cost
 	return &list, nil
 }
 
-// GetCostReport returns a single saved cost report by token.
+// GetCostReport returns a single saved cost report by ID.
 func (c *Client) GetCostReport(ctx context.Context, workspaceID, reportID string) (*CostReport, error) {
-	req, err := c.newRequest(ctx, http.MethodGet,
-		"/v1/cost-reports/"+url.PathEscape(reportID)+"?workspaceId="+url.QueryEscape(workspaceID), nil)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/cost-reports/"+url.PathEscape(reportID), workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -124,26 +123,25 @@ func (c *Client) GetCostReport(ctx context.Context, workspaceID, reportID string
 	return &report, nil
 }
 
-// CreateCostReport creates a saved cost report.
+// CreateCostReport creates a saved cost report and returns it as stored.
 func (c *Client) CreateCostReport(ctx context.Context, input *CreateCostReportInput) (*CostReport, error) {
 	req, err := c.newRequest(ctx, http.MethodPost, "/v1/cost-reports", input)
 	if err != nil {
 		return nil, err
 	}
 
-	var report CostReport
-	if err := c.do(req, &report); err != nil {
+	var created createdRef
+	if err := c.do(req, &created); err != nil {
 		return nil, err
 	}
-	return &report, nil
+	return c.GetCostReport(ctx, input.WorkspaceID, created.ID)
 }
 
 // UpdateCostReport changes a saved cost report's definition.
 func (c *Client) UpdateCostReport(
 	ctx context.Context, workspaceID, reportID string, input *UpdateCostReportInput,
 ) (*CostReport, error) {
-	req, err := c.newRequest(ctx, http.MethodPut,
-		"/v1/cost-reports/"+url.PathEscape(reportID)+"?workspaceId="+url.QueryEscape(workspaceID), input)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodPut, "/v1/cost-reports/"+url.PathEscape(reportID), workspaceID, input)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +155,7 @@ func (c *Client) UpdateCostReport(
 
 // DeleteCostReport removes a saved cost report.
 func (c *Client) DeleteCostReport(ctx context.Context, workspaceID, reportID string) error {
-	req, err := c.newRequest(ctx, http.MethodDelete,
-		"/v1/cost-reports/"+url.PathEscape(reportID)+"?workspaceId="+url.QueryEscape(workspaceID), nil)
+	req, err := c.newWorkspaceRequest(ctx, http.MethodDelete, "/v1/cost-reports/"+url.PathEscape(reportID), workspaceID, nil)
 	if err != nil {
 		return err
 	}

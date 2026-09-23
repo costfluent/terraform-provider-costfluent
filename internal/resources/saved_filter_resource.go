@@ -6,9 +6,9 @@ import (
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -28,12 +28,10 @@ type SavedFilterResource struct {
 type SavedFilterResourceModel struct {
 	ID          types.String `tfsdk:"id"`
 	WorkspaceID types.String `tfsdk:"workspace_id"`
-	Name        types.String `tfsdk:"name"`
-	Description types.String `tfsdk:"description"`
-	Filters     types.Map    `tfsdk:"filters"`
+	Title       types.String `tfsdk:"title"`
+	Filter      types.String `tfsdk:"filter"`
 	IsDefault   types.Bool   `tfsdk:"is_default"`
 	CreatedAt   types.String `tfsdk:"created_at"`
-	UpdatedAt   types.String `tfsdk:"updated_at"`
 }
 
 func NewSavedFilterResource() resource.Resource {
@@ -46,47 +44,45 @@ func (r *SavedFilterResource) Metadata(_ context.Context, req resource.MetadataR
 
 func (r *SavedFilterResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Costfluent saved filter.",
+		Description: "Manages a Costfluent saved filter: a named cost filter expression.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
-				Description: "Saved filter token.",
+				Description: "Saved filter ID.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"workspace_id": schema.StringAttribute{
 				Optional:    true,
-				Description: "Workspace token. Uses provider default if not specified.",
+				Description: "Workspace ID. Uses the provider's workspace if not specified.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 				Validators: []validator.String{
 					validators.TokenPrefix("wsp_"),
 				},
 			},
-			"name": schema.StringAttribute{
+			"title": schema.StringAttribute{
 				Required:    true,
-				Description: "Filter name.",
+				Description: "Filter title.",
 			},
-			"description": schema.StringAttribute{
-				Optional:    true,
-				Description: "Filter description.",
-			},
-			"filters": schema.MapAttribute{
+			"filter": schema.StringAttribute{
 				Required:    true,
-				ElementType: types.StringType,
-				Description: "Filter criteria as key-value pairs.",
+				Description: "Cost filter expression.",
 			},
 			"is_default": schema.BoolAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Whether this is the default filter.",
+				Default:     booldefault.StaticBool(false),
+				Description: "Whether this is the workspace's default filter.",
 			},
 			"created_at": schema.StringAttribute{
 				Computed:    true,
 				Description: "Creation timestamp.",
-			},
-			"updated_at": schema.StringAttribute{
-				Computed:    true,
-				Description: "Last update timestamp.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -104,13 +100,6 @@ func (r *SavedFilterResource) Configure(_ context.Context, req resource.Configur
 	r.client = client
 }
 
-func (r *SavedFilterResource) getClient(model *SavedFilterResourceModel) *costfluent.Client {
-	if !model.WorkspaceID.IsNull() {
-		return r.client.Workspace(model.WorkspaceID.ValueString())
-	}
-	return r.client
-}
-
 func (r *SavedFilterResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan SavedFilterResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -118,32 +107,18 @@ func (r *SavedFilterResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	client := r.getClient(&plan)
-
-	filters := make(map[string]any)
-	var strFilters map[string]string
-	resp.Diagnostics.Append(plan.Filters.ElementsAs(ctx, &strFilters, false)...)
-	for k, v := range strFilters {
-		filters[k] = v
-	}
-
-	input := &costfluent.CreateSavedFilterInput{
-		Name:    plan.Name.ValueString(),
-		Filters: filters,
-	}
-
-	if !plan.Description.IsNull() {
-		desc := plan.Description.ValueString()
-		input.Description = &desc
-	}
-
-	filter, err := client.CreateSavedFilter(ctx, input)
+	filter, err := r.client.CreateSavedFilter(ctx, &costfluent.CreateSavedFilterInput{
+		WorkspaceID: plan.WorkspaceID.ValueString(),
+		Title:       plan.Title.ValueString(),
+		Filter:      plan.Filter.ValueString(),
+		IsDefault:   plan.IsDefault.ValueBool(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create saved filter", err.Error())
 		return
 	}
 
-	mapSavedFilterToModel(ctx, filter, &plan)
+	mapSavedFilterToModel(filter, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -154,8 +129,7 @@ func (r *SavedFilterResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 
-	client := r.getClient(&state)
-	filter, err := client.GetSavedFilter(ctx, state.ID.ValueString())
+	filter, err := r.client.GetSavedFilter(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -165,7 +139,7 @@ func (r *SavedFilterResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 
-	mapSavedFilterToModel(ctx, filter, &state)
+	mapSavedFilterToModel(filter, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
@@ -177,39 +151,24 @@ func (r *SavedFilterResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	client := r.getClient(&state)
 	input := &costfluent.UpdateSavedFilterInput{}
-
-	if !plan.Name.Equal(state.Name) {
-		name := plan.Name.ValueString()
-		input.Name = &name
+	if !plan.Title.Equal(state.Title) {
+		input.Title = plan.Title.ValueStringPointer()
 	}
-	if !plan.Description.Equal(state.Description) {
-		if plan.Description.IsNull() {
-			empty := ""
-			input.Description = &empty
-		} else {
-			desc := plan.Description.ValueString()
-			input.Description = &desc
-		}
+	if !plan.Filter.Equal(state.Filter) {
+		input.Filter = plan.Filter.ValueStringPointer()
 	}
-	if !plan.Filters.Equal(state.Filters) {
-		filters := make(map[string]any)
-		var strFilters map[string]string
-		resp.Diagnostics.Append(plan.Filters.ElementsAs(ctx, &strFilters, false)...)
-		for k, v := range strFilters {
-			filters[k] = v
-		}
-		input.Filters = filters
+	if !plan.IsDefault.Equal(state.IsDefault) {
+		input.IsDefault = plan.IsDefault.ValueBoolPointer()
 	}
 
-	filter, err := client.UpdateSavedFilter(ctx, state.ID.ValueString(), input)
+	filter, err := r.client.UpdateSavedFilter(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString(), input)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update saved filter", err.Error())
 		return
 	}
 
-	mapSavedFilterToModel(ctx, filter, &plan)
+	mapSavedFilterToModel(filter, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -220,8 +179,7 @@ func (r *SavedFilterResource) Delete(ctx context.Context, req resource.DeleteReq
 		return
 	}
 
-	client := r.getClient(&state)
-	err := client.DeleteSavedFilter(ctx, state.ID.ValueString())
+	err := r.client.DeleteSavedFilter(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
 		return
 	}
@@ -230,36 +188,15 @@ func (r *SavedFilterResource) Delete(ctx context.Context, req resource.DeleteReq
 	}
 }
 
+// ImportState takes "<workspace ID>:<ID>", or a bare ID in the provider's workspace.
 func (r *SavedFilterResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importOptionallyWorkspaceScoped(ctx, req, resp)
 }
 
-func mapSavedFilterToModel(ctx context.Context, f *costfluent.SavedFilter, model *SavedFilterResourceModel) {
-	model.ID = types.StringValue(f.Token)
-	model.Name = types.StringValue(f.Name)
+func mapSavedFilterToModel(f *costfluent.SavedFilter, model *SavedFilterResourceModel) {
+	model.ID = types.StringValue(f.ID)
+	model.Title = types.StringValue(f.Title)
+	model.Filter = types.StringValue(f.Filter)
 	model.IsDefault = types.BoolValue(f.IsDefault)
 	model.CreatedAt = types.StringValue(f.CreatedAt.Format(time.RFC3339))
-
-	if f.Description != nil {
-		model.Description = types.StringValue(*f.Description)
-	} else {
-		model.Description = types.StringNull()
-	}
-	if f.UpdatedAt != nil {
-		model.UpdatedAt = types.StringValue(f.UpdatedAt.Format(time.RFC3339))
-	} else {
-		model.UpdatedAt = types.StringNull()
-	}
-
-	// Map filters from API response
-	if len(f.Filters) > 0 {
-		strFilters := make(map[string]string)
-		for k, v := range f.Filters {
-			if s, ok := v.(string); ok {
-				strFilters[k] = s
-			}
-		}
-		filtersMap, _ := types.MapValueFrom(ctx, types.StringType, strFilters)
-		model.Filters = filtersMap
-	}
 }

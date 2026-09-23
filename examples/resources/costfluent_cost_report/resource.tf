@@ -4,7 +4,8 @@ resource "costfluent_workspace" "production" {
 }
 
 resource "costfluent_folder" "reports" {
-  name = "Reports"
+  workspace_id = costfluent_workspace.production.id
+  title        = "Reports"
 }
 
 # A saved cost report: one window, one grouping dimension, one filter, and the money settings the

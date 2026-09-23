@@ -2,22 +2,20 @@ package costfluent
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
 // Dashboard represents a custom dashboard
 type Dashboard struct {
-	Token          string     `json:"token"`
-	Name           string     `json:"name"`
-	Description    *string    `json:"description,omitempty"`
-	WorkspaceToken string     `json:"workspace_token"`
-	FolderToken    *string    `json:"folder_token,omitempty"`
-	Layout         []Widget   `json:"layout,omitempty"`
-	IsDefault      bool       `json:"is_default"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	IsDefault    bool      `json:"isDefault"`
+	DateInterval string    `json:"dateInterval"`
+	DateBin      string    `json:"dateBin"`
+	Widgets      []Widget  `json:"widgets"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 // Widget represents a dashboard widget
@@ -29,34 +27,24 @@ type Widget struct {
 	Config   map[string]any `json:"config,omitempty"`
 }
 
-// WidgetPosition defines widget placement on dashboard
+// WidgetPosition defines widget placement on the dashboard grid
 type WidgetPosition struct {
-	X      int `json:"x"`
-	Y      int `json:"y"`
-	Width  int `json:"width"`
-	Height int `json:"height"`
+	X int `json:"x"`
+	Y int `json:"y"`
+	W int `json:"w"`
+	H int `json:"h"`
 }
 
 // DashboardsListResponse is the response for listing dashboards
 type DashboardsListResponse = ListResponse[Dashboard]
 
 // ListDashboards returns paginated dashboards
-func (c *Client) ListDashboards(ctx context.Context, opts *PageOptions) (*DashboardsListResponse, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/dashboards", nil)
+func (c *Client) ListDashboards(ctx context.Context, workspaceID string, opts *PageOptions) (*DashboardsListResponse, error) {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/dashboards", workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	if opts != nil {
-		q := req.URL.Query()
-		if opts.Page > 0 {
-			q.Set("page", fmt.Sprint(opts.Page))
-		}
-		if opts.Limit > 0 {
-			q.Set("limit", fmt.Sprint(opts.Limit))
-		}
-		req.URL.RawQuery = q.Encode()
-	}
+	opts.apply(req)
 
 	var resp DashboardsListResponse
 	if err := c.do(req, &resp); err != nil {
@@ -66,30 +54,15 @@ func (c *Client) ListDashboards(ctx context.Context, opts *PageOptions) (*Dashbo
 }
 
 // ListAllDashboards fetches all dashboards across all pages
-func (c *Client) ListAllDashboards(ctx context.Context, pageSize int) ([]Dashboard, error) {
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-
-	var all []Dashboard
-	page := 1
-	for {
-		resp, err := c.ListDashboards(ctx, &PageOptions{Page: page, Limit: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, resp.Data...)
-		if !resp.Links.HasNextPage() || len(resp.Data) == 0 {
-			break
-		}
-		page++
-	}
-	return all, nil
+func (c *Client) ListAllDashboards(ctx context.Context, workspaceID string, pageSize int) ([]Dashboard, error) {
+	return listAll(pageSize, func(p *PageOptions) (*ListResponse[Dashboard], error) {
+		return c.ListDashboards(ctx, workspaceID, p)
+	})
 }
 
-// GetDashboard returns a single dashboard by token
-func (c *Client) GetDashboard(ctx context.Context, token string) (*Dashboard, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/dashboards/"+token, nil)
+// GetDashboard returns a single dashboard by ID
+func (c *Client) GetDashboard(ctx context.Context, workspaceID, id string) (*Dashboard, error) {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodGet, "/v1/dashboards/"+url.PathEscape(id), workspaceID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -101,41 +74,45 @@ func (c *Client) GetDashboard(ctx context.Context, token string) (*Dashboard, er
 	return &dashboard, nil
 }
 
-// CreateDashboardInput for creating a new dashboard
+// CreateDashboardInput for creating a new dashboard. WorkspaceID falls back to the client's
+// default workspace.
 type CreateDashboardInput struct {
-	Name        string   `json:"name"`
-	Description *string  `json:"description,omitempty"`
-	FolderToken *string  `json:"folder_token,omitempty"`
-	Layout      []Widget `json:"layout,omitempty"`
-	IsDefault   bool     `json:"is_default,omitempty"`
+	WorkspaceID  string  `json:"workspaceId"`
+	Title        string  `json:"title"`
+	IsDefault    bool    `json:"isDefault,omitempty"`
+	DateInterval *string `json:"dateInterval,omitempty"`
+	DateBin      *string `json:"dateBin,omitempty"`
 }
 
-// CreateDashboard creates a new dashboard
+// CreateDashboard creates a new dashboard and returns it as stored
 func (c *Client) CreateDashboard(ctx context.Context, input *CreateDashboardInput) (*Dashboard, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/dashboards", input)
+	body := *input
+	var err error
+	if body.WorkspaceID, err = c.requireWorkspace(body.WorkspaceID); err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/dashboards", &body)
 	if err != nil {
 		return nil, err
 	}
 
-	var dashboard Dashboard
-	if err := c.do(req, &dashboard); err != nil {
+	var created createdRef
+	if err := c.do(req, &created); err != nil {
 		return nil, err
 	}
-	return &dashboard, nil
+	return c.GetDashboard(ctx, body.WorkspaceID, created.ID)
 }
 
-// UpdateDashboardInput for updating a dashboard
+// UpdateDashboardInput for updating a dashboard; unset fields are left as they are
 type UpdateDashboardInput struct {
-	Name        *string  `json:"name,omitempty"`
-	Description *string  `json:"description,omitempty"`
-	FolderToken *string  `json:"folder_token,omitempty"`
-	Layout      []Widget `json:"layout,omitempty"`
-	IsDefault   *bool    `json:"is_default,omitempty"`
+	Title        *string `json:"title,omitempty"`
+	DateInterval *string `json:"dateInterval,omitempty"`
+	DateBin      *string `json:"dateBin,omitempty"`
 }
 
 // UpdateDashboard updates an existing dashboard
-func (c *Client) UpdateDashboard(ctx context.Context, token string, input *UpdateDashboardInput) (*Dashboard, error) {
-	req, err := c.newRequest(ctx, http.MethodPatch, "/api/v1/dashboards/"+token, input)
+func (c *Client) UpdateDashboard(ctx context.Context, workspaceID, id string, input *UpdateDashboardInput) (*Dashboard, error) {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodPut, "/v1/dashboards/"+url.PathEscape(id), workspaceID, input)
 	if err != nil {
 		return nil, err
 	}
@@ -148,8 +125,8 @@ func (c *Client) UpdateDashboard(ctx context.Context, token string, input *Updat
 }
 
 // DeleteDashboard removes a dashboard
-func (c *Client) DeleteDashboard(ctx context.Context, token string) error {
-	req, err := c.newRequest(ctx, http.MethodDelete, "/api/v1/dashboards/"+token, nil)
+func (c *Client) DeleteDashboard(ctx context.Context, workspaceID, id string) error {
+	req, err := c.newWorkspaceRequest(ctx, http.MethodDelete, "/v1/dashboards/"+url.PathEscape(id), workspaceID, nil)
 	if err != nil {
 		return err
 	}

@@ -8,11 +8,10 @@ resource "costfluent_budget" "prod_budget" {
   workspace_id = data.costfluent_workspace.production.id
   name         = "Production Budget"
   amount       = 50000
-  currency     = "USD"
-  period       = "monthly"
-  start_date   = "2026-01-01"
+  currency     = data.costfluent_workspace.production.currency
+  period       = "Monthly"
 }
 
-output "workspace_timezone" {
-  value = data.costfluent_workspace.production.timezone
+output "workspace_currency" {
+  value = data.costfluent_workspace.production.currency
 }

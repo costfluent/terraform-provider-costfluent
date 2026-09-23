@@ -3,55 +3,29 @@
 page_title: "costfluent_dashboard Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent dashboard.
+  Manages a Costfluent dashboard. Widgets are arranged in the app.
 ---
 
 # costfluent_dashboard (Resource)
 
-Manages a Costfluent dashboard.
+Manages a Costfluent dashboard. Widgets are arranged in the app.
 
 ## Example Usage
 
 ```terraform
-# Executive dashboard
+# Default dashboard for the workspace
 resource "costfluent_dashboard" "executive" {
-  name        = "Executive Overview"
-  description = "High-level cost metrics for leadership"
-  is_default  = true
-
-  # Layout is a JSON array of widgets
-  layout = jsonencode([
-    {
-      id       = "cost-trend"
-      type     = "line_chart"
-      title    = "Cost Trend"
-      position = { x = 0, y = 0, w = 6, h = 4 }
-      config = {
-        metric      = "billed_cost"
-        granularity = "daily"
-      }
-    },
-    {
-      id       = "top-services"
-      type     = "bar_chart"
-      title    = "Top Services"
-      position = { x = 6, y = 0, w = 6, h = 4 }
-      config = {
-        group_by = "service"
-        limit    = 10
-      }
-    }
-  ])
+  title         = "Executive Overview"
+  is_default    = true
+  date_interval = "thisMonth"
+  date_bin      = "day"
 }
 
-resource "costfluent_folder" "engineering" {
-  name = "Engineering"
-}
-
-# Team dashboard in a folder
+# Quarterly view, binned by week
 resource "costfluent_dashboard" "engineering" {
-  name         = "Engineering Costs"
-  folder_token = costfluent_folder.engineering.id
+  title         = "Engineering Costs"
+  date_interval = "lastQuarter"
+  date_bin      = "week"
 }
 ```
 
@@ -60,18 +34,16 @@ resource "costfluent_dashboard" "engineering" {
 
 ### Required
 
-- `name` (String) Dashboard name.
+- `title` (String) Dashboard title.
 
 ### Optional
 
-- `description` (String) Dashboard description.
-- `folder_token` (String) Folder token for organization.
-- `is_default` (Boolean) Whether this is the default dashboard.
-- `layout` (String) Dashboard layout configuration (JSON array of widgets).
-- `workspace_id` (String) Workspace token. Uses provider default if not specified.
+- `date_bin` (String) Period each point covers: day, week, month or quarter.
+- `date_interval` (String) Window the dashboard shows: thisMonth, lastMonth, last7Days, last30Days, last90Days, thisQuarter, lastQuarter, yearToDate, thisYear, lastYear or custom.
+- `is_default` (Boolean) Whether this is the workspace's default dashboard. Set at creation; changing it recreates the dashboard.
+- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
-- `id` (String) Dashboard token.
-- `updated_at` (String) Last update timestamp.
+- `id` (String) Dashboard ID.

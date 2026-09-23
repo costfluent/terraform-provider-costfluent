@@ -1,19 +1,12 @@
 # Production environment filter
 resource "costfluent_saved_filter" "production" {
-  name        = "Production Only"
-  description = "Filter for production environment resources"
-
-  filters = {
-    "tag:Environment" = "production"
-  }
+  title  = "Production Only"
+  filter = "tag:Environment = 'production'"
 }
 
-# AWS compute filter
+# AWS compute filter, the workspace's default
 resource "costfluent_saved_filter" "aws_compute" {
-  name = "AWS Compute"
-
-  filters = {
-    "provider" = "aws"
-    "service"  = "Amazon EC2"
-  }
+  title      = "AWS Compute"
+  filter     = "provider = 'aws' AND service = 'Amazon EC2'"
+  is_default = true
 }

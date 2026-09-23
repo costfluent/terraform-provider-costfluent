@@ -32,7 +32,7 @@ type ProviderResourceModel struct {
 	Credentials          types.Map    `tfsdk:"credentials"`
 	Settings             types.Map    `tfsdk:"settings"`
 	Status               types.String `tfsdk:"status"`
-	ParentProviderToken  types.String `tfsdk:"parent_provider_token"`
+	ParentProviderID     types.String `tfsdk:"parent_provider_id"`
 	ExternalID           types.String `tfsdk:"external_id"`
 	SyncFrequencyMinutes types.Int64  `tfsdk:"sync_frequency_minutes"`
 	LastSyncAt           types.String `tfsdk:"last_sync_at"`
@@ -56,7 +56,7 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
-				Description: "Provider token.",
+				Description: "Provider ID.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -70,7 +70,10 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			},
 			"name": schema.StringAttribute{
 				Required:    true,
-				Description: "Display name for the provider.",
+				Description: "Display name for the provider. Fixed once connected; changing it recreates the provider.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"description": schema.StringAttribute{
 				Optional:    true,
@@ -80,16 +83,19 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Required:    true,
 				Sensitive:   true,
 				ElementType: types.StringType,
-				Description: "Provider credentials (e.g., role_arn for AWS, client_id/client_secret for Azure).",
+				Description: "Provider credentials: role_arn for AWS; tenant, appId and password for Azure; billing_account_id, project_id and bigquery_dataset for GCP.",
 			},
 			"settings": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Provider-specific settings.",
+				Description: "Provider-specific settings, such as export_bucket, export_bucket_region, export_prefix and export_name for an AWS FOCUS export.",
 			},
-			"parent_provider_token": schema.StringAttribute{
+			"parent_provider_id": schema.StringAttribute{
 				Optional:    true,
-				Description: "Parent provider token for linked accounts.",
+				Description: "Parent provider ID for linked accounts. Changing it recreates the provider.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"sync_frequency_minutes": schema.Int64Attribute{
 				Optional:    true,
@@ -102,8 +108,12 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Description: "Provider status.",
 			},
 			"external_id": schema.StringAttribute{
+				Optional:    true,
 				Computed:    true,
-				Description: "External ID for cross-account access.",
+				Description: "The account identity the provider verified when connecting: the AWS account, the Azure tenant or the GCP billing account. Not the AWS assume-role external ID, which Costfluent issues and adds itself.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"last_sync_at": schema.StringAttribute{
 				Computed:    true,
@@ -154,30 +164,33 @@ func (r *ProviderResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	minutes := int(plan.SyncFrequencyMinutes.ValueInt64())
 	input := &costfluent.CreateProviderInput{
-		Key:         plan.Key.ValueString(),
-		Name:        plan.Name.ValueString(),
-		Credentials: creds,
+		Key:                  plan.Key.ValueString(),
+		Name:                 plan.Name.ValueString(),
+		Description:          knownString(plan.Description),
+		ParentProviderID:     knownString(plan.ParentProviderID),
+		ExternalID:           knownString(plan.ExternalID),
+		Credentials:          creds,
+		SyncFrequencyMinutes: &minutes,
 	}
-
-	if !plan.Description.IsNull() {
-		desc := plan.Description.ValueString()
-		input.Description = &desc
-	}
-
 	if !plan.Settings.IsNull() {
-		settings := make(map[string]any)
-		var strSettings map[string]string
-		resp.Diagnostics.Append(plan.Settings.ElementsAs(ctx, &strSettings, false)...)
-		for k, v := range strSettings {
-			settings[k] = v
+		resp.Diagnostics.Append(plan.Settings.ElementsAs(ctx, &input.Settings, false)...)
+		if resp.Diagnostics.HasError() {
+			return
 		}
-		input.Settings = settings
 	}
 
-	provider, err := r.client.CreateProvider(ctx, input)
+	created, err := createProviderRetryingAccessPending(ctx, func() (*costfluent.ProviderCreated, error) {
+		return r.client.CreateProvider(ctx, input)
+	}, accessPendingRetryInterval, accessPendingRetryTimeout)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create provider", err.Error())
+		return
+	}
+	provider, err := r.client.GetProvider(ctx, created.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to read created provider", err.Error())
 		return
 	}
 
@@ -217,11 +230,6 @@ func (r *ProviderResource) Update(ctx context.Context, req resource.UpdateReques
 
 	input := &costfluent.UpdateProviderInput{}
 
-	if !plan.Name.Equal(state.Name) {
-		name := plan.Name.ValueString()
-		input.Name = &name
-	}
-
 	if !plan.Description.Equal(state.Description) {
 		if plan.Description.IsNull() {
 			empty := ""
@@ -238,14 +246,20 @@ func (r *ProviderResource) Update(ctx context.Context, req resource.UpdateReques
 		input.Credentials = creds
 	}
 
-	if !plan.Settings.Equal(state.Settings) {
-		settings := make(map[string]any)
-		var strSettings map[string]string
-		resp.Diagnostics.Append(plan.Settings.ElementsAs(ctx, &strSettings, false)...)
-		for k, v := range strSettings {
-			settings[k] = v
-		}
-		input.Settings = settings
+	if !plan.Settings.Equal(state.Settings) && !plan.Settings.IsNull() {
+		resp.Diagnostics.Append(plan.Settings.ElementsAs(ctx, &input.Settings, false)...)
+	}
+
+	if !plan.ExternalID.IsUnknown() && !plan.ExternalID.Equal(state.ExternalID) {
+		input.ExternalID = knownString(plan.ExternalID)
+	}
+
+	if !plan.SyncFrequencyMinutes.Equal(state.SyncFrequencyMinutes) {
+		minutes := int(plan.SyncFrequencyMinutes.ValueInt64())
+		input.SyncFrequencyMinutes = &minutes
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	provider, err := r.client.UpdateProvider(ctx, state.ID.ValueString(), input)
@@ -279,7 +293,7 @@ func (r *ProviderResource) ImportState(ctx context.Context, req resource.ImportS
 }
 
 func mapProviderToModel(p *costfluent.Provider, model *ProviderResourceModel) {
-	model.ID = types.StringValue(p.Token)
+	model.ID = types.StringValue(p.ID)
 	model.Key = types.StringValue(p.Key)
 	model.Name = types.StringValue(p.Name)
 	model.Status = types.StringValue(p.Status)
@@ -291,11 +305,7 @@ func mapProviderToModel(p *costfluent.Provider, model *ProviderResourceModel) {
 	} else {
 		model.Description = types.StringNull()
 	}
-	if p.ParentProviderToken != nil {
-		model.ParentProviderToken = types.StringValue(*p.ParentProviderToken)
-	} else {
-		model.ParentProviderToken = types.StringNull()
-	}
+	model.ParentProviderID = types.StringPointerValue(p.ParentProviderID)
 	if p.ExternalID != nil {
 		model.ExternalID = types.StringValue(*p.ExternalID)
 	} else {
@@ -321,4 +331,35 @@ func mapProviderToModel(p *costfluent.Provider, model *ProviderResourceModel) {
 	} else {
 		model.UpdatedAt = types.StringNull()
 	}
+}
+
+// A GCP dataset grant or an AWS role made seconds earlier in the same apply takes time to
+// propagate, so connecting retries the failures that say so, and only those.
+var (
+	accessPendingRetryInterval = 15 * time.Second
+	accessPendingRetryTimeout  = 3 * time.Minute
+)
+
+func createProviderRetryingAccessPending(
+	ctx context.Context,
+	create func() (*costfluent.ProviderCreated, error),
+	interval, timeout time.Duration,
+) (*costfluent.ProviderCreated, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		created, err := create()
+		if err == nil || !isAccessPending(err) || !time.Now().Add(interval).Before(deadline) {
+			return created, err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(interval):
+		}
+	}
+}
+
+func isAccessPending(err error) bool {
+	return costfluent.HasCode(err, costfluent.CodeGcpAccessPending) || costfluent.HasCode(err, costfluent.CodeAwsAccessPending)
 }
