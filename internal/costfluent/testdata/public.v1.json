@@ -2186,7 +2186,7 @@
           "Virtual Tags"
         ],
         "summary": "Update virtual tag",
-        "description": "Updates a virtual tag and returns it as stored.\n\nNeeds a token with \u0060manageTags\u0060 on the workspace.",
+        "description": "Updates a virtual tag and returns it as stored. Refused with 409 conflict when the new key is another enabled virtual tag\u0027s in the workspace.\n\nNeeds a token with \u0060manageTags\u0060 on the workspace.",
         "operationId": "UpdateVirtualTag",
         "parameters": [
           {
@@ -2220,6 +2220,16 @@
           "x-position": 1
         },
         "responses": {
+          "409": {
+            "description": "Another enabled virtual tag in the workspace has this key (conflict); nothing was changed",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "200": {
             "description": "Success",
             "headers": {
