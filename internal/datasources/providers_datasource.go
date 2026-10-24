@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -108,7 +109,7 @@ func (d *ProvidersDataSource) Configure(_ context.Context, req datasource.Config
 func (d *ProvidersDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	providers, err := d.client.ListAllProviders(ctx, 100)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to list providers", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to list providers", err)
 		return
 	}
 
@@ -118,9 +119,9 @@ func (d *ProvidersDataSource) Read(ctx context.Context, req datasource.ReadReque
 	for i, p := range providers {
 		state.Providers[i] = ProviderModel{
 			ID:                   types.StringValue(p.ID),
-			Key:                  types.StringValue(p.Key),
+			Key:                  types.StringValue(string(p.Key)),
 			Name:                 types.StringValue(p.Name),
-			Status:               types.StringValue(p.Status),
+			Status:               types.StringValue(string(p.Status)),
 			SyncFrequencyMinutes: types.Int64Value(int64(p.SyncFrequencyMinutes)),
 			CreatedAt:            types.StringValue(p.CreatedAt.Format(time.RFC3339)),
 		}

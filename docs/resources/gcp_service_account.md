@@ -3,12 +3,12 @@
 page_title: "costfluent_gcp_service_account Resource - Costfluent"
 subcategory: ""
 description: |-
-  The service account Costfluent operates for your organization in GCP. Grant it BigQuery Data Viewer on your billing export dataset, then connect the billing account with a GCP costfluent_provider. The account is created on first use and belongs to the organization: destroying this resource only removes it from state.
+  The service account Costfluent operates for your organization in GCP. Grant it BigQuery Data Viewer on your billing export dataset, then connect the billing account with a GCP costfluent_provider. The account is created on first use and belongs to the organization: destroying this resource only removes it from state. Needs an organization token with manageProviders.
 ---
 
 # costfluent_gcp_service_account (Resource)
 
-The service account Costfluent operates for your organization in GCP. Grant it BigQuery Data Viewer on your billing export dataset, then connect the billing account with a GCP `costfluent_provider`. The account is created on first use and belongs to the organization: destroying this resource only removes it from state.
+The service account Costfluent operates for your organization in GCP. Grant it BigQuery Data Viewer on your billing export dataset, then connect the billing account with a GCP `costfluent_provider`. The account is created on first use and belongs to the organization: destroying this resource only removes it from state. Needs an organization token with `manageProviders`.
 
 ## Example Usage
 

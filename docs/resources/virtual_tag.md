@@ -3,31 +3,43 @@
 page_title: "costfluent_virtual_tag Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent virtual tag: a tag value derived for cost rows from ordered rules.
+  Manages a Costfluent virtual tag: a tag key whose value per cost row is the first collapsed provider tag key the row carries, then the first rule whose filter matches, then the default. It is evaluated when cost is read, so an edit applies to the next report. Needs a token with manageTags, viewTags and viewCosts on the workspace.
 ---
 
 # costfluent_virtual_tag (Resource)
 
-Manages a Costfluent virtual tag: a tag value derived for cost rows from ordered rules.
+Manages a Costfluent virtual tag: a tag key whose value per cost row is the first collapsed provider tag key the row carries, then the first rule whose filter matches, then the default. It is evaluated when cost is read, so an edit applies to the next report. Needs a token with `manageTags`, `viewTags` and `viewCosts` on the workspace.
 
 ## Example Usage
 
 ```terraform
-# A virtual tag derives a tag value for cost rows that never carried one. The rule set is a JSON
-# document, so it is built with jsonencode.
-resource "costfluent_virtual_tag" "cost_center" {
-  key              = "cost_center"
-  description      = "Virtual cost center assignment"
-  computation_mode = "precompute"
+# A virtual tag gives every cost row a value for one key: the first provider tag key the row
+# carries, then the first rule whose filter matches, then the default. It is evaluated when cost is
+# read, so reports use an edit straight away. Each filter is the cost filter JSON document, built
+# with jsonencode, as costfluent_cost_report takes it.
+resource "costfluent_virtual_tag" "team" {
+  key         = "team"
+  description = "Owning team for every cost line"
 
-  rules = jsonencode([
-    { field = "tag:Team", operator = "equals", value = "Platform", result = "CC-1001" },
-    { field = "tag:Team", operator = "equals", value = "Frontend", result = "CC-1002" },
-    { field = "service_name", operator = "contains", value = "RDS", result = "CC-2001" },
-  ])
+  # Provider tags spelled two ways are one tag.
+  collapsed_tag_keys = ["team", "Team"]
 
-  # Everything no rule claimed.
-  default_value = "CC-9999"
+  rule {
+    value = "platform"
+    filter = jsonencode([
+      { field = "ServiceName", operator = "In", values = ["Amazon EKS", "Amazon EC2"] },
+    ])
+  }
+
+  rule {
+    value = "data"
+    filter = jsonencode([
+      { field = "Tag", tagKey = "app", operator = "StartsWith", values = ["warehouse-"] },
+    ])
+  }
+
+  # Everything no provider tag or rule claimed.
+  default_value = "unowned"
 }
 ```
 
@@ -36,22 +48,45 @@ resource "costfluent_virtual_tag" "cost_center" {
 
 ### Required
 
-- `computation_mode` (String) precompute (values stored at ingestion) or queryTime (derived when cost is read).
-- `key` (String) Tag key the virtual tag writes, as it appears in cost data.
-- `rules` (String) The rule set as a JSON document; build it with jsonencode.
+- `key` (String) The key reports group and filter by. Unique in the workspace, case-sensitively.
 
 ### Optional
 
-- `default_value` (String) Value for rows no rule matches. Removing it recreates the virtual tag.
-- `description` (String) Virtual tag description. Removing it recreates the virtual tag.
-- `is_active` (Boolean) Whether the virtual tag is applied to cost data.
-- `priority` (Number) Order among the workspace's virtual tags.
-- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
+- `collapsed_tag_keys` (List of String) Provider tag keys read in order before any rule; the first a row carries gives its value, so team and Team can be one tag. At most 10.
+- `default_value` (String) Value for rows no collapsed key or rule claims. Unset, such rows have an empty value.
+- `description` (String) Virtual tag description.
+- `rule` (Block List) Rules in evaluation order; the first whose filter matches assigns its value. At most 50, with at most 50 filter clauses across them. A virtual tag needs at least one rule or one collapsed tag key. (see [below for nested schema](#nestedblock--rule))
+- `workspace_id` (String) Workspace ID. When omitted, the provider's default workspace at creation is recorded and kept, so a later change to the provider's default does not move it.
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
 - `id` (String) Virtual tag ID.
-- `last_computed_at` (String) When precomputed values were last written.
-- `status` (String) Virtual tag status.
 - `updated_at` (String) Last update timestamp.
+
+<a id="nestedblock--rule"></a>
+### Nested Schema for `rule`
+
+Required:
+
+- `filter` (String) The cost filter as its JSON document (build it with jsonencode) or as CQL text, as costfluent_cost_report takes it. At least one clause, none on a virtual tag, and no OR: write each alternative as its own rule.
+- `value` (String) The value a matching row gets.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# An import reads each rule's filter back as its JSON document, so a rule written as CQL plans one
+# in-place update after the import that changes nothing in the tag.
+
+# The configuration sets workspace_id: "<workspace ID>:<virtual tag ID>". Import with that
+# workspace, because changing a configured workspace_id recreates the virtual tag.
+terraform import costfluent_virtual_tag.team wsp_0000000000000000000001:vtag_0000000000000000000001
+
+# The configuration leaves workspace_id out: the bare virtual tag ID imports from the provider's
+# workspace, which state then keeps.
+terraform import costfluent_virtual_tag.team vtag_0000000000000000000001
+```

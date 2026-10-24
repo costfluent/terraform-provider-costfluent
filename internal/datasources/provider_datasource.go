@@ -3,8 +3,10 @@ package datasources
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -52,7 +54,7 @@ func (d *ProviderDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 			"name": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Provider name. Either id or name must be specified.",
+				Description: "Provider name. Either id or name must be specified. A provider connected without a name is named after its type (`Amazon Web Services`), so several can share one; a name several providers share is refused, and id picks one of them.",
 			},
 			"key": schema.StringAttribute{
 				Computed:    true,
@@ -121,18 +123,32 @@ func (d *ProviderDataSource) Read(ctx context.Context, req datasource.ReadReques
 	} else if !config.Name.IsNull() {
 		providers, listErr := d.client.ListAllProviders(ctx, 100)
 		if listErr != nil {
-			resp.Diagnostics.AddError("Failed to list providers", listErr.Error())
+			apidiag.AddError(&resp.Diagnostics, "Failed to list providers", listErr)
 			return
 		}
 		name := config.Name.ValueString()
+		var matches []string
 		for _, p := range providers {
-			if p.Name == name {
-				provider = &p
-				break
+			if p.Name != name {
+				continue
 			}
+			if provider == nil {
+				provider = &p
+			}
+			match := p.ID
+			if p.ExternalID != nil {
+				match += fmt.Sprintf(" (external id %s)", *p.ExternalID)
+			}
+			matches = append(matches, match)
 		}
 		if provider == nil {
 			resp.Diagnostics.AddError("Provider not found", fmt.Sprintf("No provider found with name %q", name))
+			return
+		}
+		if len(matches) > 1 {
+			resp.Diagnostics.AddError("Provider name is ambiguous", fmt.Sprintf(
+				"%d providers are named %q: %s. Set id to the one you mean instead of name.",
+				len(matches), name, strings.Join(matches, ", ")))
 			return
 		}
 	} else {
@@ -141,14 +157,14 @@ func (d *ProviderDataSource) Read(ctx context.Context, req datasource.ReadReques
 	}
 
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to read provider", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to read provider", err)
 		return
 	}
 
 	config.ID = types.StringValue(provider.ID)
-	config.Key = types.StringValue(provider.Key)
+	config.Key = types.StringValue(string(provider.Key))
 	config.Name = types.StringValue(provider.Name)
-	config.Status = types.StringValue(provider.Status)
+	config.Status = types.StringValue(string(provider.Status))
 	config.SyncFrequencyMinutes = types.Int64Value(int64(provider.SyncFrequencyMinutes))
 	config.CreatedAt = types.StringValue(provider.CreatedAt.Format(time.RFC3339))
 

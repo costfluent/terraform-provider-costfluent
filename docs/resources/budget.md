@@ -3,28 +3,34 @@
 page_title: "costfluent_budget Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent budget.
+  Manages a Costfluent budget: a start date, a cadence of interval_count days, weeks, months or years, and an amount for each period, either one amount for every period or periods listed one by one. measure says what the amounts count: money in currency for a cost budget, or a quantity of usage_unit on a saved cost report's rows for a usage budget. Needs a token with createBudget, viewBudgets, updateBudget and deleteBudget on the workspace.
 ---
 
 # costfluent_budget (Resource)
 
-Manages a Costfluent budget.
+Manages a Costfluent budget: a start date, a cadence of interval_count days, weeks, months or years, and an amount for each period, either one amount for every period or periods listed one by one. measure says what the amounts count: money in currency for a cost budget, or a quantity of usage_unit on a saved cost report's rows for a usage budget. Needs a token with `createBudget`, `viewBudgets`, `updateBudget` and `deleteBudget` on the workspace.
 
 ## Example Usage
 
 ```terraform
+# The same amount every month from the start date; interval_count and interval_unit default to
+# one month.
 resource "costfluent_budget" "monthly" {
-  name     = "Monthly Cloud Budget"
-  amount   = 10000
-  currency = "EUR"
-  period   = "Monthly"
+  name       = "Monthly Cloud Budget"
+  amount     = "10000"
+  currency   = "EUR"
+  start_date = "2026-01-01"
 
-  # Alerts are an ordered list of thresholds, as percentages of the amount.
+  # Alert thresholds, as percentages of the current period's amount, listed lowest first. When
+  # several are crossed at once, only the highest notifies.
   alerts = [
     { threshold_percent = 50 },
     { threshold_percent = 80 },
     { threshold_percent = 100 },
   ]
+
+  # Notification channels every threshold delivers to, by ID.
+  app_ids = ["app_AAAAAAAAAAAAAAAAAAAAAA"]
 }
 
 resource "costfluent_segment" "platform" {
@@ -34,14 +40,55 @@ resource "costfluent_segment" "platform" {
   cost_centre  = "CC-1001"
 }
 
-# A budget that tracks one allocation segment's cost.
+# A budget that tracks one allocation segment's cost, a quarter at a time, with an amount for each
+# quarter. After the last one, the last amount carries on.
 resource "costfluent_budget" "platform" {
+  workspace_id   = "wsp_abc123"
+  name           = "Platform quarterly"
+  currency       = "EUR"
+  start_date     = "2026-01-01"
+  interval_count = 3
+  interval_unit  = "month"
+  segment_id     = costfluent_segment.platform.id
+
+  periods = [
+    { start_date = "2026-01-01", end_date = "2026-03-31", amount = "25000" },
+    { start_date = "2026-04-01", end_date = "2026-06-30", amount = "27500" },
+  ]
+}
+
+resource "costfluent_cost_report" "production_compute" {
   workspace_id = "wsp_abc123"
-  name         = "Platform quarterly"
-  amount       = 25000
-  currency     = "EUR"
-  period       = "Quarterly"
-  segment_id   = costfluent_segment.platform.id
+  title        = "Production compute"
+  filter       = jsonencode([{ field = "ServiceName", operator = "In", values = ["Amazon EC2"] }])
+}
+
+# A budget that counts what one saved cost report counts: its filter, virtual tags and money
+# settings. A report carries at most one cost budget and one usage budget.
+resource "costfluent_budget" "production_compute" {
+  workspace_id   = "wsp_abc123"
+  name           = "Production compute"
+  amount         = "8000"
+  currency       = "EUR"
+  cost_report_id = costfluent_cost_report.production_compute.id
+}
+
+resource "costfluent_cost_report" "ai_spend" {
+  workspace_id = "wsp_abc123"
+  title        = "AI spend"
+}
+
+# A usage budget counts one usage unit on a saved cost report's rows instead of money: five million
+# tokens a month. Its amounts are quantities in usage_unit; currency is still required, and nothing
+# the budget counts is in it.
+resource "costfluent_budget" "ai_tokens" {
+  workspace_id   = "wsp_abc123"
+  name           = "AI tokens"
+  measure        = "usage"
+  usage_unit     = "Tokens"
+  amount         = "5000000"
+  currency       = "EUR"
+  cost_report_id = costfluent_cost_report.ai_spend.id
 }
 ```
 
@@ -50,25 +97,35 @@ resource "costfluent_budget" "platform" {
 
 ### Required
 
-- `amount` (Number) Budget amount.
-- `currency` (String) Currency of the amount (ISO 4217). Changing it recreates the budget.
+- `currency` (String) Currency of the amount (ISO 4217). Changing it recreates the budget. A usage budget keeps it, but nothing it counts is in it: its amounts are quantities in usage_unit.
 - `name` (String) Budget name.
-- `period` (String) Budget period: Monthly, Quarterly or Yearly. Changing it recreates the budget.
 
 ### Optional
 
-- `alerts` (Attributes List) Alert thresholds. Changing them recreates the budget. (see [below for nested schema](#nestedatt--alerts))
-- `segment_id` (String) Allocation segment whose cost the budget tracks. Omit to track the whole workspace; removing it recreates the budget.
+- `alerts` (Attributes List) Alert thresholds, at least one, listed lowest threshold first with no repeats. Defaults to 50, 80 and 100 percent. Changing them recreates the budget. (see [below for nested schema](#nestedatt--alerts))
+- `amount` (String) The same amount for every period, as a decimal string with at most two decimals ("1250.50"), so it is never rounded through a float: money in currency, or for a usage budget a quantity in usage_unit. The same number at another scale is not a change. Exactly one of amount and periods.
+- `app_ids` (List of String) Notification channels every alert threshold delivers to. Removing them stops the budget's notifications without recreating it. A budget without alert thresholds keeps none.
+- `cost_report_id` (String) Saved cost report whose total the budget tracks: its filter, virtual tags and money settings. Conflicts with segment_id; a usage budget requires it. A report carries at most one cost budget and one usage budget. Changing or removing it moves the same budget in place.
+- `interval_count` (Number) How many interval_units each period lasts: a quarter is 3 months. Defaults to 1. Changing it recreates the budget.
+- `interval_unit` (String) Unit of the cadence: day, week, month or year. Defaults to month. Changing it recreates the budget.
+- `measure` (String) What the amounts count: cost, money in currency, or usage, a quantity of usage_unit on cost_report_id's rows. Defaults to cost. Changing it recreates the budget.
+- `periods` (Attributes List) An amount per period: the cadence's periods in order from start_date, none skipped. A day after the last period falls in a period carrying the last amount. Exactly one of amount and periods; with amount, the periods the API generates from it stay out of state. (see [below for nested schema](#nestedatt--periods))
+- `segment_id` (String) Allocation segment whose cost the budget tracks. Omit to track the whole workspace. A usage budget takes none. Changing or removing it moves the same budget in place.
+- `start_date` (String) First day of the first period (YYYY-MM-DD). Defaults to today. Changing it recreates the budget.
+- `usage_unit` (String) The one usage unit a usage budget counts, such as Tokens or GPU-Hours, compared exactly with the unit its report's rows carry. Required when measure is usage and refused when it is cost. Changing it keeps the same budget and its periods' amounts.
 - `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
-- `current_spend` (Number) Spend so far in the current period.
+- `current_spend` (String) Spend so far in the current period, as an exact decimal string; for a usage budget, the quantity in usage_unit.
+- `history_floor` (String) The plan's history floor (YYYY-MM-DD) when the current period started before it: current_spend counts from it, so it is partial, or, with outsidePlan, the whole period lies before it. Null when the whole period is measured.
 - `id` (String) Budget ID.
-- `percent_used` (Number) current_spend as a percentage of the amount.
-- `spend_availability` (String) Whether current_spend is backed by collected cost data yet.
-- `status` (String) Budget status.
+- `percent_used` (Number) current_spend as a percentage of the current period's amount. Null before start_date and whenever spend_availability is not computed.
+- `spend_availability` (String) computed when current_spend is the answer in the budget's currency, zero included, with unconverted naming what it leaves out; unavailable when the budget's scope cannot be measured because its report was deleted or its segment is gone; or outsidePlan when the current period lies wholly before the oldest day the plan keeps cost history for; or noUsage when no row of a usage budget's report carries its unit this period. current_spend is unset unless it is computed.
+- `state` (String) Where the current period stands: onTrack, atRisk when spend runs ahead of the period's amount prorated over its days, over past the whole amount, notStarted before start_date, or unknown when the spend cannot be measured.
+- `status` (String) Budget status: active, paused or archived.
+- `unconverted` (Attributes List) Spend in other billing currencies the budget does not count: no rate for its month, or the workspace's conversion is off. current_spend, percent_used and state exclude it, so a budget can read onTrack while this spend puts its scope over. Empty unless spend_availability is computed. (see [below for nested schema](#nestedatt--unconverted))
 - `updated_at` (String) Last update timestamp.
 
 <a id="nestedatt--alerts"></a>
@@ -76,4 +133,41 @@ resource "costfluent_budget" "platform" {
 
 Required:
 
-- `threshold_percent` (Number) Alert threshold as a percentage of the amount (1-200).
+- `threshold_percent` (Number) Alert threshold as a percentage of the current period's amount (1-200). When several are crossed at once, only the highest notifies.
+
+
+<a id="nestedatt--periods"></a>
+### Nested Schema for `periods`
+
+Required:
+
+- `amount` (String) The period's amount, as a decimal string with at most two decimals, in what measure counts.
+- `end_date` (String) Last day of the period (YYYY-MM-DD), the day before the next one starts.
+- `start_date` (String) First day of the period (YYYY-MM-DD).
+
+
+<a id="nestedatt--unconverted"></a>
+### Nested Schema for `unconverted`
+
+Read-Only:
+
+- `amount` (String) Spend in that currency so far in the current period, as an exact decimal string.
+- `currency` (String) Billing currency of the spend (ISO 4217).
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# Import with the form that matches the configuration's workspace_id, because changing it recreates
+# the budget. The API does not return a budget's workspace, so only the import ID can set it.
+
+# The configuration sets workspace_id: "<workspace ID>:<budget ID>". The import is refused when the
+# budget is not in that workspace.
+terraform import costfluent_budget.monthly wsp_0000000000000000000001:bud_0000000000000000000001
+
+# The configuration leaves workspace_id to the provider's workspace: the bare budget ID.
+terraform import costfluent_budget.monthly bud_0000000000000000000001
+```

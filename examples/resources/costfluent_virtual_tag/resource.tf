@@ -1,16 +1,28 @@
-# A virtual tag derives a tag value for cost rows that never carried one. The rule set is a JSON
-# document, so it is built with jsonencode.
-resource "costfluent_virtual_tag" "cost_center" {
-  key              = "cost_center"
-  description      = "Virtual cost center assignment"
-  computation_mode = "precompute"
+# A virtual tag gives every cost row a value for one key: the first provider tag key the row
+# carries, then the first rule whose filter matches, then the default. It is evaluated when cost is
+# read, so reports use an edit straight away. Each filter is the cost filter JSON document, built
+# with jsonencode, as costfluent_cost_report takes it.
+resource "costfluent_virtual_tag" "team" {
+  key         = "team"
+  description = "Owning team for every cost line"
 
-  rules = jsonencode([
-    { field = "tag:Team", operator = "equals", value = "Platform", result = "CC-1001" },
-    { field = "tag:Team", operator = "equals", value = "Frontend", result = "CC-1002" },
-    { field = "service_name", operator = "contains", value = "RDS", result = "CC-2001" },
-  ])
+  # Provider tags spelled two ways are one tag.
+  collapsed_tag_keys = ["team", "Team"]
 
-  # Everything no rule claimed.
-  default_value = "CC-9999"
+  rule {
+    value = "platform"
+    filter = jsonencode([
+      { field = "ServiceName", operator = "In", values = ["Amazon EKS", "Amazon EC2"] },
+    ])
+  }
+
+  rule {
+    value = "data"
+    filter = jsonencode([
+      { field = "Tag", tagKey = "app", operator = "StartsWith", values = ["warehouse-"] },
+    ])
+  }
+
+  # Everything no provider tag or rule claimed.
+  default_value = "unowned"
 }

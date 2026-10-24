@@ -3,6 +3,7 @@ package datasources
 import (
 	"context"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -77,7 +78,7 @@ func (d *AwsProviderInfoDataSource) Configure(_ context.Context, req datasource.
 func (d *AwsProviderInfoDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
 	connector, err := d.client.GetAwsConnector(ctx)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to read the AWS connector", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to read the AWS connector", err)
 		return
 	}
 

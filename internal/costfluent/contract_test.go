@@ -2,7 +2,9 @@ package costfluent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -36,6 +38,20 @@ var contractOps = map[string]struct{ Method, Path string }{
 	"GetEntitlement": {"GET", "/v1/entitlement"},
 	"GetUsage":       {"GET", "/v1/usage"},
 
+	"GetMe": {"GET", "/v1/me"},
+
+	"ListAuditLogs":    {"GET", "/v1/audit-logs"},
+	"ListAllAuditLogs": {"GET", "/v1/audit-logs"},
+
+	"ListBusinessMetrics":        {"GET", "/v1/business-metrics"},
+	"ListAllBusinessMetrics":     {"GET", "/v1/business-metrics"},
+	"GetBusinessMetric":          {"GET", "/v1/business-metrics/{metricId}"},
+	"CreateBusinessMetric":       {"POST", "/v1/business-metrics"},
+	"UpdateBusinessMetric":       {"PUT", "/v1/business-metrics/{metricId}"},
+	"DeleteBusinessMetric":       {"DELETE", "/v1/business-metrics/{metricId}"},
+	"ImportBusinessMetricValues": {"POST", "/v1/business-metrics/{metricId}/values"},
+	"ListBusinessMetricValues":   {"GET", "/v1/business-metrics/{metricId}/values"},
+
 	"ListBudgets":    {"GET", "/v1/budgets"},
 	"ListAllBudgets": {"GET", "/v1/budgets"},
 	"GetBudget":      {"GET", "/v1/budgets/{budgetId}"},
@@ -55,11 +71,12 @@ var contractOps = map[string]struct{ Method, Path string }{
 	"QueryCostData":  {"GET", "/v1/costs"},
 	"GetCostSummary": {"GET", "/v1/costs/summary"},
 
-	"ListCostReports":  {"GET", "/v1/cost-reports"},
-	"GetCostReport":    {"GET", "/v1/cost-reports/{costReportId}"},
-	"CreateCostReport": {"POST", "/v1/cost-reports"},
-	"UpdateCostReport": {"PUT", "/v1/cost-reports/{costReportId}"},
-	"DeleteCostReport": {"DELETE", "/v1/cost-reports/{costReportId}"},
+	"ListCostReports":   {"GET", "/v1/cost-reports"},
+	"GetCostReport":     {"GET", "/v1/cost-reports/{costReportId}"},
+	"GetCostReportData": {"GET", "/v1/cost-reports/{costReportId}/data"},
+	"CreateCostReport":  {"POST", "/v1/cost-reports"},
+	"UpdateCostReport":  {"PUT", "/v1/cost-reports/{costReportId}"},
+	"DeleteCostReport":  {"DELETE", "/v1/cost-reports/{costReportId}"},
 
 	"ListDashboards":    {"GET", "/v1/dashboards"},
 	"ListAllDashboards": {"GET", "/v1/dashboards"},
@@ -68,24 +85,34 @@ var contractOps = map[string]struct{ Method, Path string }{
 	"UpdateDashboard":   {"PUT", "/v1/dashboards/{dashboardId}"},
 	"DeleteDashboard":   {"DELETE", "/v1/dashboards/{dashboardId}"},
 
+	"SetDashboardSavedFilter": {"PUT", "/v1/dashboards/{dashboardId}/saved-filter"},
+	"SetDashboardDefault":     {"PUT", "/v1/dashboards/{dashboardId}/default"},
+	"GetDashboardWidget":      {"GET", "/v1/dashboards/{dashboardId}/widgets/{widgetId}"},
+	"CreateDashboardWidget":   {"POST", "/v1/dashboards/{dashboardId}/widgets"},
+	"UpdateDashboardWidget":   {"PUT", "/v1/dashboards/{dashboardId}/widgets/{widgetId}"},
+	"DeleteDashboardWidget":   {"DELETE", "/v1/dashboards/{dashboardId}/widgets/{widgetId}"},
+
 	"ListExchangeRates": {"GET", "/v1/exchange-rates"},
 
-	"ListFolders":  {"GET", "/v1/folders"},
-	"GetFolder":    {"GET", "/v1/folders/{folderId}"},
-	"CreateFolder": {"POST", "/v1/folders"},
-	"UpdateFolder": {"PUT", "/v1/folders/{folderId}"},
-	"DeleteFolder": {"DELETE", "/v1/folders/{folderId}"},
+	"ListFolders":          {"GET", "/v1/folders"},
+	"GetFolder":            {"GET", "/v1/folders/{folderId}"},
+	"CreateFolder":         {"POST", "/v1/folders"},
+	"UpdateFolder":         {"PUT", "/v1/folders/{folderId}"},
+	"SetFolderSavedFilter": {"PUT", "/v1/folders/{folderId}/saved-filter"},
+	"DeleteFolder":         {"DELETE", "/v1/folders/{folderId}"},
 
 	"ListProviders":              {"GET", "/v1/providers"},
 	"ListAllProviders":           {"GET", "/v1/providers"},
 	"GetProvider":                {"GET", "/v1/providers/{providerId}"},
 	"CreateProvider":             {"POST", "/v1/providers"},
-	"UpdateProvider":             {"PUT", "/v1/providers/{id}"},
+	"UpdateProvider":             {"PUT", "/v1/providers/{providerId}"},
 	"DeleteProvider":             {"DELETE", "/v1/providers/{providerId}"},
 	"TestProviderConnection":     {"POST", "/v1/providers/{providerId}/test"},
 	"TriggerProviderSync":        {"POST", "/v1/providers/{providerId}/sync"},
 	"ProvisionGcpServiceAccount": {"POST", "/v1/providers/gcp/service-account"},
 	"GetAwsConnector":            {"GET", "/v1/providers/aws/connector"},
+
+	"TranslateCostFilter": {"GET", "/v1/cost-filters/translate"},
 
 	"ListSavedFilters":    {"GET", "/v1/saved-filters"},
 	"ListAllSavedFilters": {"GET", "/v1/saved-filters"},
@@ -99,14 +126,55 @@ var contractOps = map[string]struct{ Method, Path string }{
 	"UpdateSegment": {"PUT", "/v1/segments/{segmentId}"},
 	"DeleteSegment": {"DELETE", "/v1/segments/{segmentId}"},
 
-	"ListVirtualTags":      {"GET", "/v1/virtual-tags"},
-	"ListAllVirtualTags":   {"GET", "/v1/virtual-tags"},
-	"GetVirtualTag":        {"GET", "/v1/virtual-tags/{virtualTagId}"},
-	"CreateVirtualTag":     {"POST", "/v1/virtual-tags"},
-	"UpdateVirtualTag":     {"PATCH", "/v1/virtual-tags/{virtualTagId}"},
-	"DeleteVirtualTag":     {"DELETE", "/v1/virtual-tags/{virtualTagId}"},
-	"ActivateVirtualTag":   {"POST", "/v1/virtual-tags/{virtualTagId}/activate"},
-	"DeactivateVirtualTag": {"POST", "/v1/virtual-tags/{virtualTagId}/deactivate"},
+	"ListVirtualTags":    {"GET", "/v1/virtual-tags"},
+	"ListAllVirtualTags": {"GET", "/v1/virtual-tags"},
+	"GetVirtualTag":      {"GET", "/v1/virtual-tags/{virtualTagId}"},
+	"CreateVirtualTag":   {"POST", "/v1/virtual-tags"},
+	"UpdateVirtualTag":   {"PATCH", "/v1/virtual-tags/{virtualTagId}"},
+	"DeleteVirtualTag":   {"DELETE", "/v1/virtual-tags/{virtualTagId}"},
+
+	"GetTagPolicy":    {"GET", "/v1/workspaces/{workspaceId}/tag-policy"},
+	"UpdateTagPolicy": {"PUT", "/v1/workspaces/{workspaceId}/tag-policy"},
+
+	"ListWorkspaceProviders":  {"GET", "/v1/workspace-providers"},
+	"GetWorkspaceProvider":    {"GET", "/v1/workspace-providers/{workspaceProviderId}"},
+	"CreateWorkspaceProvider": {"POST", "/v1/workspace-providers"},
+	"UpdateWorkspaceProvider": {"PUT", "/v1/workspace-providers/{workspaceProviderId}"},
+	"DeleteWorkspaceProvider": {"DELETE", "/v1/workspace-providers/{workspaceProviderId}"},
+
+	"ListApps":    {"GET", "/v1/apps"},
+	"ListAllApps": {"GET", "/v1/apps"},
+	"GetApp":      {"GET", "/v1/apps/{appId}"},
+	"CreateApp":   {"POST", "/v1/apps"},
+	"UpdateApp":   {"PUT", "/v1/apps/{appId}"},
+	"DeleteApp":   {"DELETE", "/v1/apps/{appId}"},
+
+	"ListCostReportSubscriptions":      {"GET", "/v1/cost-report-subscriptions"},
+	"GetCostReportSubscription":        {"GET", "/v1/cost-report-subscriptions/{subscriptionId}"},
+	"CreateCostReportSubscription":     {"POST", "/v1/cost-report-subscriptions"},
+	"UpdateCostReportSubscription":     {"PATCH", "/v1/cost-report-subscriptions/{subscriptionId}"},
+	"DeleteCostReportSubscription":     {"DELETE", "/v1/cost-report-subscriptions/{subscriptionId}"},
+	"ActivateCostReportSubscription":   {"POST", "/v1/cost-report-subscriptions/{subscriptionId}/activate"},
+	"DeactivateCostReportSubscription": {"POST", "/v1/cost-report-subscriptions/{subscriptionId}/deactivate"},
+
+	"ListTeams":                  {"GET", "/v1/teams"},
+	"ListAllTeams":               {"GET", "/v1/teams"},
+	"GetTeam":                    {"GET", "/v1/teams/{teamId}"},
+	"CreateTeam":                 {"POST", "/v1/teams"},
+	"UpdateTeam":                 {"PUT", "/v1/teams/{teamId}"},
+	"DeleteTeam":                 {"DELETE", "/v1/teams/{teamId}"},
+	"AddTeamMember":              {"POST", "/v1/teams/{teamId}/members"},
+	"UpdateTeamMember":           {"PUT", "/v1/teams/{teamId}/members/{userId}"},
+	"RemoveTeamMember":           {"DELETE", "/v1/teams/{teamId}/members/{userId}"},
+	"ListTeamWorkspaceAccess":    {"GET", "/v1/teams/{teamId}/workspaces"},
+	"ListAllTeamWorkspaceAccess": {"GET", "/v1/teams/{teamId}/workspaces"},
+	"SetTeamWorkspaceAccess":     {"PUT", "/v1/teams/{teamId}/workspaces/{workspaceId}"},
+	"RemoveTeamWorkspaceAccess":  {"DELETE", "/v1/teams/{teamId}/workspaces/{workspaceId}"},
+
+	"ListUsers":    {"GET", "/v1/users"},
+	"ListAllUsers": {"GET", "/v1/users"},
+	"GetUser":      {"GET", "/v1/users/{userId}"},
+	"InviteUser":   {"POST", "/v1/users"},
 
 	"ListWorkspaces":    {"GET", "/v1/workspaces"},
 	"ListAllWorkspaces": {"GET", "/v1/workspaces"},
@@ -117,7 +185,7 @@ var contractOps = map[string]struct{ Method, Path string }{
 }
 
 // notOperations are the exported client methods that send nothing.
-var notOperations = map[string]bool{"Workspace": true, "BaseURL": true}
+var notOperations = map[string]bool{"Workspace": true, "BaseURL": true, "ResolveWorkspace": true}
 
 type specSchema struct {
 	Ref        string                 `json:"$ref"`
@@ -127,6 +195,9 @@ type specSchema struct {
 	Items      *specSchema            `json:"items"`
 	AllOf      []*specSchema          `json:"allOf"`
 	OneOf      []*specSchema          `json:"oneOf"`
+	Extensible []string               `json:"x-extensible-enum"`
+	EnumNames  []string               `json:"x-enumNames"`
+	Enum       []string               `json:"enum"`
 }
 
 type specContent map[string]struct {
@@ -170,6 +241,18 @@ type route struct {
 }
 
 var templateParam = regexp.MustCompile(`\{[^}]+\}`)
+
+// The constant names the document the contract test holds the client to, so a release says which
+// contract it was built from; make generate rewrites both together.
+func TestContractSHA256IsTheContractsDigest(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "public.v1.json"))
+	if err != nil {
+		t.Fatalf("reading the Public API spec: %v", err)
+	}
+	if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != ContractSHA256 {
+		t.Errorf("ContractSHA256 = %s, but testdata/public.v1.json hashes to %s; run make generate", ContractSHA256, got)
+	}
+}
 
 func loadSpec(t *testing.T) *spec {
 	t.Helper()
@@ -334,10 +417,14 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // call invokes a client method with placeholder arguments: a string for every ID and a zero value
-// for every input.
+// for every input, and no request options.
 func call(ctx context.Context, m reflect.Value) []reflect.Value {
 	ctxType := reflect.TypeOf((*context.Context)(nil)).Elem()
-	args := make([]reflect.Value, m.Type().NumIn())
+	n := m.Type().NumIn()
+	if m.Type().IsVariadic() {
+		n--
+	}
+	args := make([]reflect.Value, n)
 	for i := range args {
 		in := m.Type().In(i)
 		switch {
@@ -473,6 +560,9 @@ func TestContractCoversEveryMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A scan that finds nothing passes every check below, so it must find at least the methods
+	// contractOps already names.
+	scanned := 0
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
 			continue
@@ -493,9 +583,14 @@ func TestContractCoversEveryMethod(t *testing.T) {
 			if recv, ok := star.X.(*ast.Ident); !ok || recv.Name != "Client" {
 				continue
 			}
-			if _, listed := contractOps[fn.Name.Name]; !listed && !notOperations[fn.Name.Name] {
+			if _, listed := contractOps[fn.Name.Name]; listed {
+				scanned++
+			} else if !notOperations[fn.Name.Name] {
 				t.Errorf("%s: (*Client).%s is not in contractOps", file, fn.Name.Name)
 			}
 		}
+	}
+	if scanned < len(contractOps) {
+		t.Errorf("found %d (*Client) methods named in contractOps across %d Go files, want %d: the scan no longer sees the client", scanned, len(files), len(contractOps))
 	}
 }

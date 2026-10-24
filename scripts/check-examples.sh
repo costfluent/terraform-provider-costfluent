@@ -14,7 +14,13 @@ command -v terraform >/dev/null || { echo 'terraform is required to validate the
 # Every go command here reads this module, whatever directory the caller ran the script from.
 cd "$PROVIDER_ROOT"
 
-readonly VERSION=0.1.0
+# The local build is mirrored at the version examples/provider/provider.tf's constraint names, read
+# from it: a release preparation moves the constraint, and a mirror left behind sends Terraform to the
+# registry for a version that is not published yet.
+VERSION="$(sed -n 's/^ *version *= *"~> *\([0-9][0-9.]*\)".*/\1/p' examples/provider/provider.tf)"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || { echo 'examples/provider/provider.tf names no "~> X.Y.Z" version to mirror the build at' >&2; exit 1; }
+readonly VERSION
 readonly NAMESPACE=costfluent
 
 work="$(mktemp -d)"

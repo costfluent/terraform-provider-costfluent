@@ -1,0 +1,1 @@
+terraform import costfluent_team.platform team_0000000000000000000001

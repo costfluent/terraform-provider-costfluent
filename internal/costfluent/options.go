@@ -1,7 +1,10 @@
 package costfluent
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 	"time"
 )
 
@@ -22,17 +25,39 @@ func WithWorkspace(id string) Option {
 	}
 }
 
-// WithBaseURL sets a custom base URL (useful for testing or on-prem)
-func WithBaseURL(url string) Option {
+// WithBaseURL sets a custom base URL (useful for testing or on-prem). It must use https, since the
+// API key travels with every request; plain http is accepted only for localhost, 127.0.0.1 and ::1.
+// Any other base URL makes every request fail with the reason, before a key is sent.
+func WithBaseURL(baseURL string) Option {
 	return func(c *Client) {
-		c.baseURL = url
+		c.baseURL = baseURL
+		c.baseURLErr = checkBaseURL(baseURL)
 	}
 }
 
-// WithHTTPClient sets a custom HTTP client
+// checkBaseURL is the rule the Terraform provider and the MCP server apply to the same setting.
+func checkBaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("costfluent: base URL %q is not a URL: %w", raw, err)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("costfluent: base URL %q has no host; write it as https://<host>", raw)
+	}
+	switch {
+	case u.Scheme == "https":
+		return nil
+	case u.Scheme == "http" && slices.Contains([]string{"localhost", "127.0.0.1", "::1"}, u.Hostname()):
+		return nil
+	}
+	return fmt.Errorf("costfluent: base URL %q must use https, because the API key travels with every request; plain http is allowed only for localhost, 127.0.0.1 and ::1", raw)
+}
+
+// WithHTTPClient bases the client on a copy of hc: its transport, timeout, redirect policy and
+// cookie jar. hc itself is left unchanged.
 func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) {
-		c.httpClient = hc
+		c.callerHTTPClient = hc
 	}
 }
 
@@ -50,9 +75,9 @@ func WithDebug(debug bool) Option {
 	}
 }
 
-// WithTimeout sets the HTTP client timeout
+// WithTimeout bounds each attempt of a request, overriding the timeout a WithHTTPClient client carries
 func WithTimeout(d time.Duration) Option {
 	return func(c *Client) {
-		c.httpClient.Timeout = d
+		c.timeout = &d
 	}
 }

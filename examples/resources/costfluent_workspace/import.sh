@@ -1,0 +1,1 @@
+terraform import costfluent_workspace.production wsp_0000000000000000000001

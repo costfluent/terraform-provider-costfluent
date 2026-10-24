@@ -3,12 +3,12 @@
 page_title: "costfluent_provider Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent provider (cloud account connection).
+  Manages a Costfluent provider (cloud account connection). Needs an organization token with manageProviders and viewProviders.
 ---
 
 # costfluent_provider (Resource)
 
-Manages a Costfluent provider (cloud account connection).
+Manages a Costfluent provider (cloud account connection). Needs an organization token with `manageProviders` and `viewProviders`.
 
 ## Example Usage
 
@@ -56,17 +56,17 @@ resource "costfluent_provider" "azure" {
 
 ### Required
 
-- `credentials` (Map of String, Sensitive) Provider credentials: role_arn for AWS; tenant, appId and password for Azure; billing_account_id, project_id and bigquery_dataset for GCP.
-- `key` (String) Provider type key (e.g., aws, azure, gcp, datadog).
-- `name` (String) Display name for the provider. Fixed once connected; changing it recreates the provider.
+- `credentials` (Map of String, Sensitive) Provider credentials: role_arn for AWS; tenant, appId and password for Azure; billing_account_id, project_id and bigquery_dataset for GCP; admin_key for Anthropic and OpenAI. Sensitive hides them from plan output, but the Terraform state holds them in plaintext, so keep state in an encrypted backend with restricted access.
+- `key` (String) Provider type key (e.g., aws, azure, gcp, kubernetes), as the Public API spells it.
+- `name` (String) Display name for the provider. Changing it renames the connection in place; it keeps its ID and the costs it has collected.
 
 ### Optional
 
 - `description` (String) Provider description.
 - `external_id` (String) The account identity the provider verified when connecting: the AWS account, the Azure tenant or the GCP billing account. Not the AWS assume-role external ID, which Costfluent issues and adds itself.
-- `parent_provider_id` (String) Parent provider ID for linked accounts. Changing it recreates the provider.
-- `settings` (Map of String) Provider-specific settings, such as export_bucket, export_bucket_region, export_prefix and export_name for an AWS FOCUS export.
-- `sync_frequency_minutes` (Number) Sync frequency in minutes. Defaults to 360 (6 hours).
+- `parent_provider_id` (String) Parent provider ID for linked accounts. Fixed once connected: a plan that changes it is refused.
+- `settings` (Map of String) Provider-specific settings: export_bucket, export_bucket_region, export_prefix and export_name for an AWS FOCUS export, carbon_export_name for the AWS carbon emissions Data Export beside it, and carbon_dataset for a GCP Carbon Footprint export dataset. Write-only: the API does not return them, so a change made outside Terraform is not detected. Changing them updates the provider in place, and removing or emptying them clears them.
+- `sync_frequency_minutes` (Number) Sync frequency in minutes, 60 to 1440. Defaults to 1440 (once a day).
 
 ### Read-Only
 
@@ -77,3 +77,15 @@ resource "costfluent_provider" "azure" {
 - `next_sync_at` (String) Next scheduled sync timestamp.
 - `status` (String) Provider status.
 - `updated_at` (String) Last update timestamp.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# The API never returns credentials or settings, so set them in the configuration after the
+# import; the next apply sends them.
+terraform import costfluent_provider.aws_main prv_0000000000000000000001
+```

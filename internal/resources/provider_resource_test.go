@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/defaults"
 )
 
 func pending() error {
@@ -16,6 +19,7 @@ func pending() error {
 }
 
 func TestCreateProviderRetriesGcpAccessPendingUntilItConnects(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	created, err := createProviderRetryingAccessPending(context.Background(), func() (*costfluent.ProviderCreated, error) {
 		calls++
@@ -31,6 +35,7 @@ func TestCreateProviderRetriesGcpAccessPendingUntilItConnects(t *testing.T) {
 }
 
 func TestCreateProviderRetriesAwsAccessPendingUntilItConnects(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	created, err := createProviderRetryingAccessPending(context.Background(), func() (*costfluent.ProviderCreated, error) {
 		calls++
@@ -48,6 +53,7 @@ func TestCreateProviderRetriesAwsAccessPendingUntilItConnects(t *testing.T) {
 }
 
 func TestCreateProviderDoesNotRetryOtherFailures(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	_, err := createProviderRetryingAccessPending(context.Background(), func() (*costfluent.ProviderCreated, error) {
 		calls++
@@ -60,6 +66,7 @@ func TestCreateProviderDoesNotRetryOtherFailures(t *testing.T) {
 }
 
 func TestCreateProviderGivesUpAtTheDeadline(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	_, err := createProviderRetryingAccessPending(context.Background(), func() (*costfluent.ProviderCreated, error) {
 		calls++
@@ -72,6 +79,7 @@ func TestCreateProviderGivesUpAtTheDeadline(t *testing.T) {
 }
 
 func TestCreateProviderStopsWhenCancelled(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -82,5 +90,21 @@ func TestCreateProviderStopsWhenCancelled(t *testing.T) {
 	var apiErr *costfluent.APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// The schema default must match the server's, or an apply that omits the attribute plans a change
+// on every run.
+func TestProviderSyncFrequencyDefaultsToOnceADay(t *testing.T) {
+	t.Parallel()
+	var resp resource.SchemaResponse
+	(&ProviderResource{}).Schema(context.Background(), resource.SchemaRequest{}, &resp)
+
+	attribute := resp.Schema.Attributes["sync_frequency_minutes"].(schema.Int64Attribute)
+	var value defaults.Int64Response
+	attribute.Default.DefaultInt64(context.Background(), defaults.Int64Request{}, &value)
+
+	if got := value.PlanValue.ValueInt64(); got != 1440 {
+		t.Fatalf("sync_frequency_minutes defaults to %d, want 1440", got)
 	}
 }

@@ -3,12 +3,12 @@
 page_title: "costfluent_cost_alert Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent cost alert: a threshold on a workspace's cost, optionally narrowed to providers and a filter, that notifies the linked apps when it is crossed.
+  Manages a Costfluent cost alert: a threshold on a workspace's cost, optionally narrowed to providers and a filter, that notifies the linked apps when it is crossed. Needs a token with manageAlerts and viewCosts on the workspace.
 ---
 
 # costfluent_cost_alert (Resource)
 
-Manages a Costfluent cost alert: a threshold on a workspace's cost, optionally narrowed to providers and a filter, that notifies the linked apps when it is crossed.
+Manages a Costfluent cost alert: a threshold on a workspace's cost, optionally narrowed to providers and a filter, that notifies the linked apps when it is crossed. Needs a token with `manageAlerts` and `viewCosts` on the workspace.
 
 ## Example Usage
 
@@ -17,7 +17,7 @@ Manages a Costfluent cost alert: a threshold on a workspace's cost, optionally n
 resource "costfluent_cost_alert" "high_spend" {
   name            = "High Daily Spend"
   threshold_type  = "absolute"
-  threshold_value = 1000
+  threshold_value = "1000"
   provider_ids    = ["prv_abc123"]
 }
 
@@ -25,9 +25,9 @@ resource "costfluent_cost_alert" "high_spend" {
 resource "costfluent_cost_alert" "ec2_growth" {
   name                         = "EC2 week-over-week growth"
   threshold_type               = "percentageIncrease"
-  threshold_value              = 20
+  threshold_value              = "20"
   comparison_period            = "previousWeek"
-  filter                       = "service = 'Amazon EC2'"
+  filter                       = "costs.service = 'Amazon EC2'"
   evaluation_frequency_minutes = 360
   is_paused                    = true
 }
@@ -39,18 +39,19 @@ resource "costfluent_cost_alert" "ec2_growth" {
 ### Required
 
 - `name` (String) Alert name.
-- `threshold_type` (String) What the threshold measures: absolute (a cost amount), percentageIncrease (growth against comparison_period), budgetPercentage or tagCoverageBelow.
-- `threshold_value` (Number) Threshold, in the unit threshold_type names. Must be greater than zero.
+- `threshold_type` (String) What the threshold measures: absolute (the increase in cost against comparison_period, in the alert's currency), percentageIncrease (that increase as a percentage), budgetPercentage (the month-to-date spend, from the 1st of the month through the last settled day, reaching threshold_value in the alert's currency; it references no budget) or tagCoverageBelow (the workspace's tag coverage falling below threshold_value percent).
+- `threshold_value` (String) Threshold, in the unit threshold_type names, as a decimal string ("250", "12.5"). Must be greater than zero. The same number at another scale is not a change.
 
 ### Optional
 
-- `app_ids` (List of String) Connected apps the alert notifies. Emptying it recreates the alert.
-- `comparison_period` (String) Period a percentageIncrease threshold compares against: previousDay, previousWeek, previousMonth or sameDayLastMonth. Removing it recreates the alert.
+- `app_ids` (List of String) Connected apps the alert notifies. Emptying or removing it removes every channel in place.
+- `comparison_period` (String) Period a percentageIncrease threshold compares against: previousDay, previousWeek, previousMonth or sameDayLastMonth. Removing it clears it in place, so the alert compares with the previous day.
 - `evaluation_frequency_minutes` (Number) How often the alert is evaluated, 15 to 1440 minutes. Defaults to 60.
-- `filter` (String) Cost filter expression narrowing what the alert watches. Removing it recreates the alert.
+- `filter` (String) Cost filter narrowing what the alert watches, as CQL text, such as `costs.service = 'Amazon EC2'`, or as its JSON document (build it with jsonencode). The API stores and returns the JSON document; the configured text is kept while it means the filter the API stores. Removing it clears it in place.
 - `is_paused` (Boolean) Whether evaluation is paused.
-- `provider_ids` (List of String) Providers whose cost the alert watches. Omit for every provider; emptying it recreates the alert.
-- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
+- `minimum_amount` (String) Increase in the workspace currency a percentageIncrease alert's cost must also reach before it fires, as a decimal string ("50"), so a large percentage of a small cost stays quiet. Zero or none is no floor; only a percentageIncrease alert takes one.
+- `provider_ids` (List of String) Providers whose cost the alert watches. Omit or empty for every provider.
+- `workspace_id` (String) Workspace ID. When omitted, the provider's default workspace at creation is recorded and kept, so a later change to the provider's default does not move it.
 
 ### Read-Only
 
@@ -59,3 +60,19 @@ resource "costfluent_cost_alert" "ec2_growth" {
 - `last_evaluated_at` (String) When the alert was last evaluated.
 - `status` (String) Alert status.
 - `updated_at` (String) Last update timestamp.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# The configuration sets workspace_id: "<workspace ID>:<cost alert ID>". Import with that
+# workspace, because changing a configured workspace_id recreates the cost alert.
+terraform import costfluent_cost_alert.high_spend wsp_0000000000000000000001:cal_0000000000000000000001
+
+# The configuration leaves workspace_id out: the bare cost alert ID imports from the provider's
+# workspace, which state then keeps.
+terraform import costfluent_cost_alert.high_spend cal_0000000000000000000001
+```

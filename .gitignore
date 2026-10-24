@@ -2,8 +2,8 @@
 .idea/
 
 # Binaries. The provider binary is anchored with a leading slash: unanchored, the pattern also
-# matches the cmd/terraform-provider-costfluent package directory, and the publish mirror then
-# copies that source across and quietly declines to commit it.
+# matches the cmd/terraform-provider-costfluent package directory, and git then quietly declines
+# to commit that source.
 *.exe
 *.exe~
 *.dll

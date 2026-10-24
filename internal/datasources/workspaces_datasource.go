@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -25,6 +26,7 @@ type WorkspaceModel struct {
 	ID        types.String `tfsdk:"id"`
 	Name      types.String `tfsdk:"name"`
 	Currency  types.String `tfsdk:"currency"`
+	TimeZone  types.String `tfsdk:"time_zone"`
 	CreatedAt types.String `tfsdk:"created_at"`
 	UpdatedAt types.String `tfsdk:"updated_at"`
 }
@@ -58,6 +60,10 @@ func (d *WorkspacesDataSource) Schema(_ context.Context, _ datasource.SchemaRequ
 							Computed:    true,
 							Description: "Default currency.",
 						},
+						"time_zone": schema.StringAttribute{
+							Computed:    true,
+							Description: "IANA time zone the workspace's calendar runs in, such as Europe/Berlin.",
+						},
 						"created_at": schema.StringAttribute{
 							Computed:    true,
 							Description: "Creation timestamp.",
@@ -88,7 +94,7 @@ func (d *WorkspacesDataSource) Configure(_ context.Context, req datasource.Confi
 func (d *WorkspacesDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	workspaces, err := d.client.ListAllWorkspaces(ctx, 100)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to list workspaces", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to list workspaces", err)
 		return
 	}
 
@@ -100,6 +106,7 @@ func (d *WorkspacesDataSource) Read(ctx context.Context, req datasource.ReadRequ
 			ID:        types.StringValue(ws.ID),
 			Name:      types.StringValue(ws.Name),
 			Currency:  types.StringValue(ws.Currency),
+			TimeZone:  types.StringValue(ws.TimeZone),
 			CreatedAt: types.StringValue(ws.CreatedAt.Format(time.RFC3339)),
 		}
 		if ws.UpdatedAt != nil {

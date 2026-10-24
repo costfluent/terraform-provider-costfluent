@@ -3,12 +3,12 @@
 page_title: "costfluent_segment Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent segment: where an allocation rule assigns cost.
+  Manages a Costfluent segment: where an allocation rule assigns cost. Needs a token with manageCostAllocation and viewCostAllocation on the workspace.
 ---
 
 # costfluent_segment (Resource)
 
-Manages a Costfluent segment: where an allocation rule assigns cost.
+Manages a Costfluent segment: where an allocation rule assigns cost. Needs a token with `manageCostAllocation` and `viewCostAllocation` on the workspace.
 
 ## Example Usage
 
@@ -24,7 +24,7 @@ resource "costfluent_segment" "checkout_platform" {
   workspace_id = costfluent_workspace.production.id
 
   # Name the team row when it exists, or a label when it does not — one or the other, never both.
-  team_id     = "tem_7f3a9c21"
+  team_id     = "team_0f8c2d71b4e6a93c5d27e1"
   product     = "Checkout"
   cost_centre = "CC-1001"
 }
@@ -37,15 +37,29 @@ resource "costfluent_segment" "data_platform" {
   cost_centre = "CC-1002"
 }
 
-# The shared-cost bucket. Its cost is spread across direct segments in proportion to what they own,
-# rather than being charged to whatever it names.
+# The workspace's unlabelled shared-cost bucket. It names no team, product or cost centre: its cost
+# is spread across direct segments in proportion to their direct cost.
 resource "costfluent_segment" "shared" {
   workspace_id = costfluent_workspace.production.id
   is_shared    = true
+}
 
-  team_label  = "Shared"
-  product     = "Platform"
-  cost_centre = "CC-0000"
+# A labelled shared pool split by fixed percents, which sum to exactly 100. The last target takes
+# the rounding residual, so order matters. method = "even" gives each target the same share and
+# takes no percents. Allocation is evaluated at query time, so changing a split restates every past
+# month.
+resource "costfluent_segment" "cluster" {
+  workspace_id = costfluent_workspace.production.id
+  is_shared    = true
+  label        = "Kubernetes cluster"
+
+  split = {
+    method = "percent"
+    targets = [
+      { segment_id = costfluent_segment.checkout_platform.id, percent = 60 },
+      { segment_id = costfluent_segment.data_platform.id, percent = 40 },
+    ]
+  }
 }
 ```
 
@@ -54,13 +68,15 @@ resource "costfluent_segment" "shared" {
 
 ### Required
 
-- `cost_centre` (String) Cost centre the segment charges to.
-- `product` (String) Product the segment is responsible for.
 - `workspace_id` (String) Workspace token the segment belongs to.
 
 ### Optional
 
-- `is_shared` (Boolean) Create the workspace's shared-cost bucket instead of a named segment. A shared segment names nothing; its cost is spread across direct segments by weight.
+- `cost_centre` (String) Cost centre the segment charges to. Required on a direct segment; the API stores none for a shared one.
+- `is_shared` (Boolean) Create a shared-cost bucket instead of a named segment. A shared segment names no team, product or cost centre; its cost is spread across direct segments as split says.
+- `label` (String) A shared segment's label. A workspace holds one shared segment per label, compared ignoring case, and one without. Only a shared segment takes one.
+- `product` (String) Product the segment is responsible for. Required on a direct segment; the API stores none for a shared one.
+- `split` (Attributes) How a shared segment's pool is spread across direct segments of its workspace. Unset is proportional. Only a shared segment takes one. Allocation is evaluated at query time, so changing the split restates every past month. (see [below for nested schema](#nestedatt--split))
 - `team_id` (String) Team token when the segment is a real team. Set this or team_label, not both.
 - `team_label` (String) Segment name when it is a label rather than a team row.
 
@@ -70,3 +86,36 @@ resource "costfluent_segment" "shared" {
 - `id` (String) Segment token.
 - `team_name` (String) The referenced team's current name, resolved on read.
 - `updated_at` (String) Last update timestamp.
+
+<a id="nestedatt--split"></a>
+### Nested Schema for `split`
+
+Required:
+
+- `method` (String) proportional spreads the pool by each direct segment's positive direct cost and names no targets; even gives two or more targets the same share; percent gives each target its percent, the percents summing to exactly 100.
+
+Optional:
+
+- `targets` (Attributes List) The distinct direct segments of the workspace an even or percent split names, at most 100, in order. Per currency each share but the last is rounded to eight decimal places and the last target takes the rest. (see [below for nested schema](#nestedatt--split--targets))
+
+<a id="nestedatt--split--targets"></a>
+### Nested Schema for `split.targets`
+
+Required:
+
+- `segment_id` (String) Token of a direct segment in the same workspace.
+
+Optional:
+
+- `percent` (Number) A percent split's share for this target: above 0 and at most 100, with at most two decimals. Unset for an even split.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# A segment is imported by "<workspace ID>:<segment ID>"; the workspace is required.
+terraform import costfluent_segment.checkout_platform wsp_0000000000000000000001:seg_0000000000000000000001
+```

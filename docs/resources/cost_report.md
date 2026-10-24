@@ -3,12 +3,12 @@
 page_title: "costfluent_cost_report Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent cost report: a saved filter, grouping and chart.
+  Manages a Costfluent cost report: a saved filter, grouping and chart. Needs a token with createCostReport, viewCostReports, updateCostReport, deleteCostReport and viewCosts on the workspace.
 ---
 
 # costfluent_cost_report (Resource)
 
-Manages a Costfluent cost report: a saved filter, grouping and chart.
+Manages a Costfluent cost report: a saved filter, grouping and chart. Needs a token with `createCostReport`, `viewCostReports`, `updateCostReport`, `deleteCostReport` and `viewCosts` on the workspace.
 
 ## Example Usage
 
@@ -23,8 +23,8 @@ resource "costfluent_folder" "reports" {
   title        = "Reports"
 }
 
-# A saved cost report: one window, one grouping dimension, one filter, and the money settings the
-# numbers are computed with.
+# A saved cost report: one window, up to three grouping slots, one filter, and the money settings
+# the numbers are computed with.
 resource "costfluent_cost_report" "monthly_by_service" {
   workspace_id = costfluent_workspace.production.id
   title        = "Monthly cost by service"
@@ -32,7 +32,12 @@ resource "costfluent_cost_report" "monthly_by_service" {
   date_interval = "ThisMonth"
   date_bin      = "Day"
   chart_type    = "StackedBar"
-  group_by      = "ServiceName"
+
+  # Service, then the team tag within each service. `group_by = []` saves a single total.
+  group_by = [
+    { dimension = "ServiceName" },
+    { dimension = "Tag", key = "team" },
+  ]
 
   settings = {
     amortize               = true
@@ -55,7 +60,7 @@ resource "costfluent_cost_report" "q4_eu_compute" {
   start_date    = "2026-10-01"
   end_date      = "2026-12-31"
   date_bin      = "Month"
-  group_by      = "Region"
+  group_by      = [{ dimension = "Region" }]
 
   filter = jsonencode([
     {
@@ -69,6 +74,37 @@ resource "costfluent_cost_report" "q4_eu_compute" {
       values   = ["eu-"]
     }
   ])
+}
+
+# The same kind of filter written as CQL, which also reaches what the JSON list cannot say: OR.
+# The API stores it as JSON; the provider keeps this text while it means what is stored.
+resource "costfluent_cost_report" "eu_compute_or_storage" {
+  workspace_id = costfluent_workspace.production.id
+  title        = "EU compute, or any storage"
+
+  date_interval = "Last30Days"
+  group_by      = [{ dimension = "ServiceName" }]
+
+  filter = "(costs.service IN ('Amazon Elastic Compute Cloud', 'Amazon Relational Database Service') AND costs.region LIKE 'eu-%') OR costs.service = 'Amazon Simple Storage Service'"
+}
+
+# A segment's cost: what the allocation rules assign to it directly, plus its share of the shared
+# cost bucket. Name segments by id, with = or IN, in one condition outside any OR.
+resource "costfluent_segment" "checkout" {
+  workspace_id = costfluent_workspace.production.id
+  team_label   = "Checkout team"
+  product      = "Checkout"
+  cost_centre  = "CC-1001"
+}
+
+resource "costfluent_cost_report" "checkout_team" {
+  workspace_id = costfluent_workspace.production.id
+  title        = "Checkout team"
+
+  date_interval = "LastMonth"
+  group_by      = [{ dimension = "ServiceName" }]
+
+  filter = "costs.segment = '${costfluent_segment.checkout.id}'"
 }
 ```
 
@@ -85,18 +121,30 @@ resource "costfluent_cost_report" "q4_eu_compute" {
 - `chart_type` (String) How the report is drawn.
 - `date_bin` (String) Bucket size the cost is grouped into over time.
 - `date_interval` (String) Relative window the report covers.
-- `end_date` (String) Inclusive last day, for an absolute window.
-- `filter` (String) The cost filter as its JSON document. Omit for a report with no filter.
-- `folder_id` (String) Folder token the report is filed under.
-- `group_by` (String) The single dimension the report breaks its window down by. One of Provider, SubAccount, ServiceName, Region, ResourceName, ChargeCategory, Cluster, Namespace. Cluster and Namespace group Kubernetes cost by the cluster and namespace it was allocated to.
-- `settings` (Attributes) What the report counts. Each of these changes the money. (see [below for nested schema](#nestedatt--settings))
-- `start_date` (String) Inclusive first day, for an absolute window.
+- `end_date` (String) Inclusive last day, for an absolute window. Removed, the report keeps its stored date.
+- `filter` (String) The cost filter as its JSON document or as CQL text, such as `costs.provider = 'aws' OR costs.region LIKE 'eu-%'`. The configured text is kept while it means the filter the API stores. Omit for a report with no filter.
+- `folder_id` (String) Folder token the report is filed under. Removing it takes the report out of its folder.
+- `group_by` (Attributes List) Up to three slots the report breaks its window down by, outermost first. Omitted, the report groups by ServiceName. Set to `[]` for a single total. (see [below for nested schema](#nestedatt--group_by))
+- `settings` (Attributes) What the report counts. `measure` chooses what it charts; each other setting changes the money. A setting left out takes the workspace's report default on create and keeps the report's own on update, and a comparison window set in the app is kept. (see [below for nested schema](#nestedatt--settings))
+- `start_date` (String) Inclusive first day, for an absolute window. Removed, the report keeps its stored date.
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
 - `id` (String) Cost report token.
 - `updated_at` (String) Last update timestamp.
+
+<a id="nestedatt--group_by"></a>
+### Nested Schema for `group_by`
+
+Required:
+
+- `dimension` (String) One of Provider, ProviderName, SubAccount, ServiceName, Region, ResourceName, ChargeCategory, Tag, VirtualTag, Segment, Cluster, Namespace, BillingAccount, ServiceCategory, ServiceSubcategory, UsageUnit, ChargeClass, Tagged, ResourceId, CommitmentStatus, CommitmentType, PricingCategory, Sku. Cluster and Namespace group Kubernetes cost by the cluster and namespace it was allocated to.
+
+Optional:
+
+- `key` (String) What the dimension needs to name a group: the tag key for Tag, the virtual tag token for VirtualTag. Omit for the other dimensions.
+
 
 <a id="nestedatt--settings"></a>
 ### Nested Schema for `settings`
@@ -108,4 +156,31 @@ Optional:
 - `include_credits` (Boolean)
 - `include_refunds` (Boolean)
 - `include_tax` (Boolean)
+- `measure` (String) What the report charts: `cost`, `usage` (the consumed quantity, each unit apart) or `count` (distinct resources). A count has no `Cumulative` date bin. Defaults to `cost`.
 - `show_forecast` (Boolean)
+- `unit_cost_label_filter` (Attributes List) Which of the unit cost metric's values the cost is divided by: a value counts when its label in every listed column is one of that column's values. Each `key` is a label column of the metric, listed once. Needs `unit_cost_metric_id`; unset divides by every value. (see [below for nested schema](#nestedatt--settings--unit_cost_label_filter))
+- `unit_cost_metric_id` (String) A `costfluent_business_metric` of the report's workspace to chart cost per unit of: each bin's cost over the metric's amount in that bin. Needs the `cost` measure and a date bin other than `Cumulative`. Unset charts cost alone.
+
+<a id="nestedatt--settings--unit_cost_label_filter"></a>
+### Nested Schema for `settings.unit_cost_label_filter`
+
+Required:
+
+- `key` (String) A label column of the metric.
+- `values` (List of String) The labels of that column the unit cost counts, any one of them.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# A cost report is imported by "<workspace ID>:<cost report ID>"; the workspace is required.
+#
+# An import reads the report back as the API returns it: enums in camel case (last30Days,
+# providerName) and the filter as its JSON document. A configuration that writes them another way,
+# such as Last30Days or a CQL filter, plans one in-place update after the import that changes
+# nothing in the report; write them as the API returns them for an import that plans nothing.
+terraform import costfluent_cost_report.monthly_by_service wsp_0000000000000000000001:crp_0000000000000000000001
+```

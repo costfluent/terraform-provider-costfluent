@@ -14,9 +14,9 @@ import (
 type PlanLadderEntry struct {
 	Code               string   `json:"code"`
 	Name               string   `json:"name"`
-	PriceAmount        float64  `json:"priceAmount"`
+	PriceAmount        *Decimal `json:"priceAmount"` // nil on Custom, which is quoted rather than priced
 	Currency           string   `json:"currency"`
-	SpendCeiling       *float64 `json:"spendCeiling"`
+	SpendCeiling       *Decimal `json:"spendCeiling"`
 	HistoryDays        int      `json:"historyDays"`
 	MaxConnections     *int     `json:"maxConnections"`
 	MaxAllocationRules *int     `json:"maxAllocationRules"`
@@ -33,7 +33,7 @@ type Entitlement struct {
 	Status   string `json:"status"`
 	Currency string `json:"currency"`
 
-	SpendCeiling       *float64 `json:"spendCeiling"`
+	SpendCeiling       *Decimal `json:"spendCeiling"`
 	HistoryDays        *int     `json:"historyDays"`
 	MaxConnections     *int     `json:"maxConnections"`
 	MaxAllocationRules *int     `json:"maxAllocationRules"`
@@ -60,7 +60,7 @@ type Entitlement struct {
 // UsageHistoryEntry is one completed month, as it feeds the band average.
 type UsageHistoryEntry struct {
 	PeriodStart  string  `json:"periodStart"`
-	TrackedSpend float64 `json:"trackedSpend"`
+	TrackedSpend Decimal `json:"trackedSpend"`
 	RowsIngested int64   `json:"rowsIngested"`
 	BytesStored  int64   `json:"bytesStored"`
 }
@@ -73,7 +73,7 @@ type Usage struct {
 	PeriodStart string `json:"periodStart"`
 	Currency    string `json:"currency"`
 
-	TrackedSpend          float64  `json:"trackedSpend"`
+	TrackedSpend          Decimal  `json:"trackedSpend"`
 	IsSpendComplete       bool     `json:"isSpendComplete"`
 	UnconvertedCurrencies []string `json:"unconvertedCurrencies"`
 
@@ -84,7 +84,7 @@ type Usage struct {
 
 	ComputedAt *time.Time `json:"computedAt"`
 
-	AverageTrackedSpend *float64 `json:"averageTrackedSpend"`
+	AverageTrackedSpend *Decimal `json:"averageTrackedSpend"`
 	BandPlanCode        *string  `json:"bandPlanCode"`
 
 	History []UsageHistoryEntry `json:"history"`

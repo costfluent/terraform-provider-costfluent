@@ -7,9 +7,8 @@ data "costfluent_workspace" "production" {
 resource "costfluent_budget" "prod_budget" {
   workspace_id = data.costfluent_workspace.production.id
   name         = "Production Budget"
-  amount       = 50000
+  amount       = "50000"
   currency     = data.costfluent_workspace.production.currency
-  period       = "Monthly"
 }
 
 output "workspace_currency" {

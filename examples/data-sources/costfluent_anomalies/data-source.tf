@@ -5,7 +5,7 @@ data "costfluent_anomalies" "open" {
 }
 
 output "open_anomaly_count" {
-  value = data.costfluent_anomalies.open.unacknowledged_count
+  value = length(data.costfluent_anomalies.open.anomalies)
 }
 
 output "high_severity" {

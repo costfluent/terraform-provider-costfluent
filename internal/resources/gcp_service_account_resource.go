@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -12,15 +13,16 @@ import (
 )
 
 var (
-	_ resource.Resource              = &GcpServiceAccountResource{}
-	_ resource.ResourceWithConfigure = &GcpServiceAccountResource{}
+	_ resource.Resource               = &GcpServiceAccountResource{}
+	_ resource.ResourceWithConfigure  = &GcpServiceAccountResource{}
+	_ resource.ResourceWithModifyPlan = &GcpServiceAccountResource{}
 )
 
 // GcpServiceAccountResource is the service account Costfluent operates for the organization in
 // GCP. It belongs to the organization, not to this configuration: creating it provisions or reads
 // it, and destroying it only forgets it.
 type GcpServiceAccountResource struct {
-	client *costfluent.Client
+	managed
 }
 
 type GcpServiceAccountResourceModel struct {
@@ -31,11 +33,10 @@ type GcpServiceAccountResourceModel struct {
 }
 
 func NewGcpServiceAccountResource() resource.Resource {
-	return &GcpServiceAccountResource{}
-}
-
-func (r *GcpServiceAccountResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_gcp_service_account"
+	return &GcpServiceAccountResource{managed{name: "gcp_service_account", needs: Needs{
+		Organization: true,
+		Create:       []costfluent.Capability{costfluent.CapabilityManageProviders},
+	}}}
 }
 
 func (r *GcpServiceAccountResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
@@ -48,10 +49,11 @@ func (r *GcpServiceAccountResource) Schema(_ context.Context, _ resource.SchemaR
 	}
 
 	resp.Schema = schema.Schema{
-		Description: "The service account Costfluent operates for your organization in GCP. Grant it BigQuery " +
-			"Data Viewer on your billing export dataset, then connect the billing account with a GCP " +
+		Description: "The service account Costfluent operates for your organization in GCP. Grant it BigQuery Data " +
+			"Viewer on your billing export dataset, then connect the billing account with a GCP " +
 			"`costfluent_provider`. The account is created on first use and belongs to the organization: " +
-			"destroying this resource only removes it from state.",
+			"destroying this resource only removes it from state. " +
+			r.needs.sentence(),
 		Attributes: map[string]schema.Attribute{
 			"id":    computed("The service account's email."),
 			"email": computed("The service account's email: the principal to grant BigQuery Data Viewer on the dataset."),
@@ -63,22 +65,10 @@ func (r *GcpServiceAccountResource) Schema(_ context.Context, _ resource.SchemaR
 	}
 }
 
-func (r *GcpServiceAccountResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*costfluent.Client)
-	if !ok {
-		resp.Diagnostics.AddError("Unexpected Resource Configure Type", "Expected *costfluent.Client")
-		return
-	}
-	r.client = client
-}
-
 func (r *GcpServiceAccountResource) Create(ctx context.Context, _ resource.CreateRequest, resp *resource.CreateResponse) {
 	account, err := r.client.ProvisionGcpServiceAccount(ctx)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to provision the GCP service account", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to provision the GCP service account", err)
 		return
 	}
 

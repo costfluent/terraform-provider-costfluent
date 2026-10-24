@@ -14,7 +14,12 @@ type SavedFilter struct {
 	Filter    string    `json:"filter"`
 	IsDefault bool      `json:"isDefault"`
 	CreatedAt time.Time `json:"createdAt"`
+	// ETag is the stored version this response carried, to send back with IfMatch. Empty from a
+	// list, which carries no versions.
+	ETag string `json:"-"`
 }
+
+func (f *SavedFilter) setETag(etag string) { f.ETag = etag }
 
 // SavedFiltersListResponse is the response for listing saved filters
 type SavedFiltersListResponse = ListResponse[SavedFilter]
@@ -71,7 +76,7 @@ func (c *Client) CreateSavedFilter(ctx context.Context, input *CreateSavedFilter
 	if body.WorkspaceID, err = c.requireWorkspace(body.WorkspaceID); err != nil {
 		return nil, err
 	}
-	req, err := c.newRequest(ctx, http.MethodPost, "/v1/saved-filters", &body)
+	req, err := c.newCreateRequest(ctx, "/v1/saved-filters", &body)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +85,9 @@ func (c *Client) CreateSavedFilter(ctx context.Context, input *CreateSavedFilter
 	if err := c.do(req, &created); err != nil {
 		return nil, err
 	}
-	return c.GetSavedFilter(ctx, body.WorkspaceID, created.ID)
+	return readCreated(created.ID, func() (*SavedFilter, error) {
+		return c.GetSavedFilter(ctx, body.WorkspaceID, created.ID)
+	})
 }
 
 // UpdateSavedFilterInput for updating a saved filter; unset fields are left as they are
@@ -91,11 +98,12 @@ type UpdateSavedFilterInput struct {
 }
 
 // UpdateSavedFilter updates an existing saved filter
-func (c *Client) UpdateSavedFilter(ctx context.Context, workspaceID, id string, input *UpdateSavedFilterInput) (*SavedFilter, error) {
+func (c *Client) UpdateSavedFilter(ctx context.Context, workspaceID, id string, input *UpdateSavedFilterInput, opts ...RequestOption) (*SavedFilter, error) {
 	req, err := c.newWorkspaceRequest(ctx, http.MethodPut, "/v1/saved-filters/"+url.PathEscape(id), workspaceID, input)
 	if err != nil {
 		return nil, err
 	}
+	applyOptions(req, opts)
 
 	var filter SavedFilter
 	if err := c.do(req, &filter); err != nil {
@@ -105,10 +113,11 @@ func (c *Client) UpdateSavedFilter(ctx context.Context, workspaceID, id string, 
 }
 
 // DeleteSavedFilter removes a saved filter
-func (c *Client) DeleteSavedFilter(ctx context.Context, workspaceID, id string) error {
+func (c *Client) DeleteSavedFilter(ctx context.Context, workspaceID, id string, opts ...RequestOption) error {
 	req, err := c.newWorkspaceRequest(ctx, http.MethodDelete, "/v1/saved-filters/"+url.PathEscape(id), workspaceID, nil)
 	if err != nil {
 		return err
 	}
+	applyOptions(req, opts)
 	return c.do(req, nil)
 }

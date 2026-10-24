@@ -3,19 +3,28 @@
 page_title: "costfluent_workspace Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent workspace.
+  Manages a Costfluent workspace. Needs an organization token with createWorkspace, viewWorkspace, updateWorkspace and deleteWorkspace.
 ---
 
 # costfluent_workspace (Resource)
 
-Manages a Costfluent workspace.
+Manages a Costfluent workspace. Needs an organization token with `createWorkspace`, `viewWorkspace`, `updateWorkspace` and `deleteWorkspace`.
 
 ## Example Usage
 
 ```terraform
+# Its day and budget periods begin at midnight in Berlin, and a new cost report
+# starts on last month by week, unamortised, unless it says otherwise.
 resource "costfluent_workspace" "production" {
-  name     = "Production"
-  currency = "EUR"
+  name      = "Production"
+  currency  = "EUR"
+  time_zone = "Europe/Berlin"
+
+  report_defaults = {
+    date_interval = "lastMonth"
+    date_bin      = "week"
+    amortize      = false
+  }
 }
 
 # Costs billed in other currencies are converted into GBP at each month's average rate.
@@ -25,6 +34,7 @@ resource "costfluent_workspace" "uk" {
   enable_currency_conversion = true
   conversion_currency        = "GBP"
   conversion_method          = "monthlyAverage"
+  time_zone                  = "Europe/London"
 }
 ```
 
@@ -37,11 +47,16 @@ resource "costfluent_workspace" "uk" {
 
 ### Optional
 
+- `anomalies_exclude_commitment_fees` (Boolean) Leave commitment fees, reservation and Savings Plan purchases and fees, out of anomaly detection.
+- `anomalies_exclude_marketplace` (Boolean) Leave marketplace charges out of anomaly detection.
+- `anomaly_notification_threshold` (String) The smallest increase over its baseline, in the workspace currency and as a decimal string ("250"), an anomaly must reach to be notified. "0" notifies every anomaly.
 - `conversion_currency` (String) The currency costs are converted into while conversion is enabled (ISO 4217).
 - `conversion_method` (String) Exchange rate dates: monthlyAverage (the mean of the month's daily rates), monthEndRate (the month's last rate) or transactionDate (each charge's own day).
 - `currency` (String) Display preference (ISO 4217): the currency costs default to where no billing currency applies. Changeable only while enable_currency_conversion is false, because the conversion selection overrides it.
 - `enable_automatic_syncing` (Boolean) Collect from this workspace's data sources on Costfluent's own schedule. When false, the recurring collection is skipped for every source no other workspace still syncs; stored cost data and an explicitly requested sync are unaffected.
 - `enable_currency_conversion` (Boolean) Convert every cost into conversion_currency using European Central Bank reference rates. When false, costs stay in the currency they were billed in.
+- `report_defaults` (Attributes) What a new cost report in the workspace starts from for every part its own configuration leaves out. Each attribute left unset keeps the workspace's current value. (see [below for nested schema](#nestedatt--report_defaults))
+- `time_zone` (String) IANA time zone the workspace's calendar runs in, such as Europe/Berlin: when its day and its budget periods begin, and the default zone of its report notifications. Costs keep the provider's UTC billing day, and absolute and percentageIncrease cost alerts measure only those days that have settled.
 
 ### Read-Only
 
@@ -49,3 +64,27 @@ resource "costfluent_workspace" "uk" {
 - `id` (String) Workspace ID (wsp_xxx).
 - `provider_count` (Number) Number of providers connected to the workspace.
 - `updated_at` (String) Last update timestamp.
+
+<a id="nestedatt--report_defaults"></a>
+### Nested Schema for `report_defaults`
+
+Optional:
+
+- `amortize` (Boolean)
+- `compare_to_last_period` (Boolean)
+- `date_bin` (String) The granularity: day, week, month, quarter or cumulative.
+- `date_interval` (String) A relative date range such as thisMonth or last30Days; never custom.
+- `include_credits` (Boolean)
+- `include_refunds` (Boolean)
+- `include_tax` (Boolean)
+- `show_forecast` (Boolean)
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import costfluent_workspace.production wsp_0000000000000000000001
+```

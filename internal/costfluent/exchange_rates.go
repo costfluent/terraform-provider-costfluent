@@ -2,7 +2,6 @@ package costfluent
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -19,23 +18,17 @@ type ExchangeRate struct {
 }
 
 // ExchangeRatesResponse is one page of rates over the window that was read.
-type ExchangeRatesResponse struct {
-	Rates    []ExchangeRate `json:"rates"`
-	From     string         `json:"from"`
-	To       string         `json:"to"`
-	Page     int            `json:"page"`
-	PageSize int            `json:"pageSize"`
-	Total    int            `json:"total"`
-}
+type ExchangeRatesResponse = ListResponse[ExchangeRate]
 
-// ExchangeRateOptions scopes a rate listing. A zero value reads the latest publication day.
+// ExchangeRateOptions scopes a rate listing to the publication days from StartDate to EndDate,
+// both included; only the calendar day of each is sent. A zero value reads the latest publication
+// day.
 type ExchangeRateOptions struct {
-	From           *time.Time
-	To             *time.Time
+	StartDate      *time.Time
+	EndDate        *time.Time
 	BaseCurrency   string
 	TargetCurrency string
-	Page           int
-	PageSize       int
+	PageOptions
 }
 
 // ListExchangeRates returns the rates published over a window, so the rates a report converted
@@ -48,11 +41,11 @@ func (c *Client) ListExchangeRates(ctx context.Context, opts *ExchangeRateOption
 
 	if opts != nil {
 		q := req.URL.Query()
-		if opts.From != nil {
-			q.Set("from", opts.From.Format(time.DateOnly))
+		if opts.StartDate != nil {
+			q.Set("startDate", opts.StartDate.Format(time.DateOnly))
 		}
-		if opts.To != nil {
-			q.Set("to", opts.To.Format(time.DateOnly))
+		if opts.EndDate != nil {
+			q.Set("endDate", opts.EndDate.Format(time.DateOnly))
 		}
 		if opts.BaseCurrency != "" {
 			q.Set("baseCurrency", opts.BaseCurrency)
@@ -60,13 +53,8 @@ func (c *Client) ListExchangeRates(ctx context.Context, opts *ExchangeRateOption
 		if opts.TargetCurrency != "" {
 			q.Set("targetCurrency", opts.TargetCurrency)
 		}
-		if opts.Page > 0 {
-			q.Set("page", fmt.Sprint(opts.Page))
-		}
-		if opts.PageSize > 0 {
-			q.Set("pageSize", fmt.Sprint(opts.PageSize))
-		}
 		req.URL.RawQuery = q.Encode()
+		opts.apply(req)
 	}
 
 	var resp ExchangeRatesResponse

@@ -9,30 +9,39 @@ import (
 
 // Provider represents a cloud provider connection
 type Provider struct {
-	ID                   string     `json:"id"`
-	Type                 string     `json:"type"`
-	Key                  string     `json:"key"`
-	Name                 string     `json:"name"`
-	Description          *string    `json:"description,omitempty"`
-	Status               string     `json:"status"`
-	ParentProviderID     *string    `json:"parentProviderId,omitempty"`
-	ExternalID           *string    `json:"externalId,omitempty"`
-	LastSyncAt           *time.Time `json:"lastSyncAt,omitempty"`
-	LastSyncStatus       *string    `json:"lastSyncStatus,omitempty"`
-	LastSyncError        *string    `json:"lastSyncError,omitempty"`
-	NextSyncAt           *time.Time `json:"nextSyncAt,omitempty"`
-	SyncFrequencyMinutes int        `json:"syncFrequencyMinutes"`
-	CreatedAt            time.Time  `json:"createdAt"`
-	UpdatedAt            *time.Time `json:"updatedAt,omitempty"`
+	ID                   string         `json:"id"`
+	Type                 string         `json:"type"`
+	Key                  ProviderKey    `json:"key"`
+	Name                 string         `json:"name"`
+	Description          *string        `json:"description,omitempty"`
+	Status               ProviderStatus `json:"status"`
+	ParentProviderID     *string        `json:"parentProviderId,omitempty"`
+	ExternalID           *string        `json:"externalId,omitempty"`
+	LastSyncAt           *time.Time     `json:"lastSyncAt,omitempty"`
+	LastSyncStatus       *string        `json:"lastSyncStatus,omitempty"`
+	LastSyncError        *string        `json:"lastSyncError,omitempty"`
+	NextSyncAt           *time.Time     `json:"nextSyncAt,omitempty"`
+	SyncFrequencyMinutes int            `json:"syncFrequencyMinutes"`
+	CreatedAt            time.Time      `json:"createdAt"`
+	UpdatedAt            *time.Time     `json:"updatedAt,omitempty"`
+	// ETag is the stored version this response carried, to send back with IfMatch. Empty from a
+	// list, which carries no versions.
+	ETag string `json:"-"`
 }
+
+func (p *Provider) setETag(etag string) { p.ETag = etag }
 
 // ProviderCreated is what connecting a provider returns; read the full Provider with GetProvider.
 type ProviderCreated struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Key  string `json:"key"`
-	Name string `json:"name"`
+	ID   string      `json:"id"`
+	Type string      `json:"type"`
+	Key  ProviderKey `json:"key"`
+	Name string      `json:"name"`
+	// ETag is the version the connection was created at, to send back with IfMatch.
+	ETag string `json:"-"`
 }
+
+func (p *ProviderCreated) setETag(etag string) { p.ETag = etag }
 
 // ProvidersListResponse is the response for listing providers
 type ProvidersListResponse = ListResponse[Provider]
@@ -76,7 +85,7 @@ func (c *Client) GetProvider(ctx context.Context, id string) (*Provider, error) 
 
 // CreateProviderInput for connecting a new provider
 type CreateProviderInput struct {
-	Key                  string            `json:"key"`
+	Key                  ProviderKey       `json:"key"`
 	Name                 string            `json:"name,omitempty"`
 	Description          *string           `json:"description,omitempty"`
 	ParentProviderID     *string           `json:"parentProviderId,omitempty"`
@@ -88,7 +97,7 @@ type CreateProviderInput struct {
 
 // CreateProvider connects a new provider
 func (c *Client) CreateProvider(ctx context.Context, input *CreateProviderInput) (*ProviderCreated, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/v1/providers", input)
+	req, err := c.newCreateRequest(ctx, "/v1/providers", input)
 	if err != nil {
 		return nil, err
 	}
@@ -147,21 +156,27 @@ func (c *Client) GetAwsConnector(ctx context.Context) (*AwsConnector, error) {
 	return &connector, nil
 }
 
-// UpdateProviderInput for updating a provider. A provider's name is fixed once connected.
+// UpdateProviderInput for updating a provider in place. A nil or false field keeps its value: the
+// name renames the connection, which keeps its id and the costs it has collected, and
+// ClearDescription and ClearSettings remove theirs. A non-empty Settings map replaces the settings.
 type UpdateProviderInput struct {
+	Name                 *string           `json:"name,omitempty"`
 	Description          *string           `json:"description,omitempty"`
+	ClearDescription     bool              `json:"clearDescription,omitempty"`
 	ExternalID           *string           `json:"externalId,omitempty"`
 	Credentials          map[string]string `json:"credentials,omitempty"`
 	Settings             map[string]string `json:"settings,omitempty"`
+	ClearSettings        bool              `json:"clearSettings,omitempty"`
 	SyncFrequencyMinutes *int              `json:"syncFrequencyMinutes,omitempty"`
 }
 
 // UpdateProvider updates an existing provider
-func (c *Client) UpdateProvider(ctx context.Context, id string, input *UpdateProviderInput) (*Provider, error) {
+func (c *Client) UpdateProvider(ctx context.Context, id string, input *UpdateProviderInput, opts ...RequestOption) (*Provider, error) {
 	req, err := c.newRequest(ctx, http.MethodPut, "/v1/providers/"+url.PathEscape(id), input)
 	if err != nil {
 		return nil, err
 	}
+	applyOptions(req, opts)
 
 	var provider Provider
 	if err := c.do(req, &provider); err != nil {
@@ -171,11 +186,12 @@ func (c *Client) UpdateProvider(ctx context.Context, id string, input *UpdatePro
 }
 
 // DeleteProvider removes a provider
-func (c *Client) DeleteProvider(ctx context.Context, id string) error {
+func (c *Client) DeleteProvider(ctx context.Context, id string, opts ...RequestOption) error {
 	req, err := c.newRequest(ctx, http.MethodDelete, "/v1/providers/"+url.PathEscape(id), nil)
 	if err != nil {
 		return err
 	}
+	applyOptions(req, opts)
 	return c.do(req, nil)
 }
 

@@ -3,6 +3,7 @@ package datasources
 import (
 	"context"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -31,13 +32,13 @@ type EntitlementDataSourceModel struct {
 	Status   types.String `tfsdk:"status"`
 	Currency types.String `tfsdk:"currency"`
 
-	SpendCeiling       types.Float64 `tfsdk:"spend_ceiling"`
-	HistoryDays        types.Int64   `tfsdk:"history_days"`
-	MaxConnections     types.Int64   `tfsdk:"max_connections"`
-	MaxAllocationRules types.Int64   `tfsdk:"max_allocation_rules"`
-	MaxBackfillMonths  types.Int64   `tfsdk:"max_backfill_months"`
-	MaxRowsPerMonth    types.Int64   `tfsdk:"max_rows_per_month"`
-	MaxBytesStored     types.Int64   `tfsdk:"max_bytes_stored"`
+	SpendCeiling       types.String `tfsdk:"spend_ceiling"`
+	HistoryDays        types.Int64  `tfsdk:"history_days"`
+	MaxConnections     types.Int64  `tfsdk:"max_connections"`
+	MaxAllocationRules types.Int64  `tfsdk:"max_allocation_rules"`
+	MaxBackfillMonths  types.Int64  `tfsdk:"max_backfill_months"`
+	MaxRowsPerMonth    types.Int64  `tfsdk:"max_rows_per_month"`
+	MaxBytesStored     types.Int64  `tfsdk:"max_bytes_stored"`
 
 	Features         []types.String `tfsdk:"features"`
 	OverriddenLimits []types.String `tfsdk:"overridden_limits"`
@@ -79,9 +80,9 @@ func (d *EntitlementDataSource) Schema(_ context.Context, _ datasource.SchemaReq
 				Computed:    true,
 				Description: "Currency of the price and the spend ceiling.",
 			},
-			"spend_ceiling": schema.Float64Attribute{
+			"spend_ceiling": schema.StringAttribute{
 				Computed:    true,
-				Description: "Tracked monthly spend the tier covers. Unset above Optimize.",
+				Description: "Tracked monthly spend the tier covers. Unset on Custom.",
 			},
 			"history_days": schema.Int64Attribute{
 				Computed:    true,
@@ -164,7 +165,7 @@ func (d *EntitlementDataSource) Read(ctx context.Context, req datasource.ReadReq
 
 	entitlement, err := d.client.GetEntitlement(ctx)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to read entitlement", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to read entitlement", err)
 		return
 	}
 
@@ -173,7 +174,7 @@ func (d *EntitlementDataSource) Read(ctx context.Context, req datasource.ReadReq
 	config.Status = types.StringValue(entitlement.Status)
 	config.Currency = types.StringValue(entitlement.Currency)
 
-	config.SpendCeiling = optionalFloat(entitlement.SpendCeiling)
+	config.SpendCeiling = optionalDecimal(entitlement.SpendCeiling)
 	config.HistoryDays = optionalInt(entitlement.HistoryDays)
 	config.MaxConnections = optionalInt(entitlement.MaxConnections)
 	config.MaxAllocationRules = optionalInt(entitlement.MaxAllocationRules)
@@ -200,13 +201,6 @@ func (d *EntitlementDataSource) Read(ctx context.Context, req datasource.ReadReq
 
 // An absent limit is null rather than zero. Zero is a real cap that allows nothing, and reading
 // "unlimited" as "none" would be the worst possible way to get this wrong.
-func optionalFloat(value *float64) types.Float64 {
-	if value == nil {
-		return types.Float64Null()
-	}
-	return types.Float64Value(*value)
-}
-
 func optionalInt(value *int) types.Int64 {
 	if value == nil {
 		return types.Int64Null()

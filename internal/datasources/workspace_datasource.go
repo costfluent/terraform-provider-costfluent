@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -22,6 +23,7 @@ type WorkspaceDataSourceModel struct {
 	ID       types.String `tfsdk:"id"`
 	Name     types.String `tfsdk:"name"`
 	Currency types.String `tfsdk:"currency"`
+	TimeZone types.String `tfsdk:"time_zone"`
 
 	EnableAutomaticSyncing types.Bool `tfsdk:"enable_automatic_syncing"`
 
@@ -54,6 +56,10 @@ func (d *WorkspaceDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 			"currency": schema.StringAttribute{
 				Computed:    true,
 				Description: "Default currency.",
+			},
+			"time_zone": schema.StringAttribute{
+				Computed:    true,
+				Description: "IANA time zone the workspace's calendar runs in, such as Europe/Berlin.",
 			},
 			"enable_automatic_syncing": schema.BoolAttribute{
 				Computed:    true,
@@ -99,7 +105,7 @@ func (d *WorkspaceDataSource) Read(ctx context.Context, req datasource.ReadReque
 		// Search by name
 		workspaces, listErr := d.client.ListAllWorkspaces(ctx, 100)
 		if listErr != nil {
-			resp.Diagnostics.AddError("Failed to list workspaces", listErr.Error())
+			apidiag.AddError(&resp.Diagnostics, "Failed to list workspaces", listErr)
 			return
 		}
 		name := config.Name.ValueString()
@@ -119,13 +125,14 @@ func (d *WorkspaceDataSource) Read(ctx context.Context, req datasource.ReadReque
 	}
 
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to read workspace", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to read workspace", err)
 		return
 	}
 
 	config.ID = types.StringValue(workspace.ID)
 	config.Name = types.StringValue(workspace.Name)
 	config.Currency = types.StringValue(workspace.Currency)
+	config.TimeZone = types.StringValue(workspace.TimeZone)
 	config.EnableAutomaticSyncing = types.BoolValue(workspace.EnableAutomaticSyncing)
 	config.CreatedAt = types.StringValue(workspace.CreatedAt.Format(time.RFC3339))
 

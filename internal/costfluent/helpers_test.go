@@ -44,7 +44,9 @@ func testClient(t *testing.T, stubs ...stub) (*Client, *[]exchange) {
 			return
 		}
 		s := stubs[n]
-		if s.Body != "" {
+		if s.Status >= 400 {
+			w.Header().Set("Content-Type", "application/problem+json")
+		} else if s.Body != "" {
 			w.Header().Set("Content-Type", "application/json")
 		}
 		w.WriteHeader(s.Status)
