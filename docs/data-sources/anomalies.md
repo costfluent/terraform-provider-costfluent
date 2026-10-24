@@ -3,12 +3,12 @@
 page_title: "costfluent_anomalies Data Source - Costfluent"
 subcategory: ""
 description: |-
-  List the organization's detected cost anomalies, newest first.
+  List the detected cost anomalies, newest first: every workspace's with an organization token, its own workspace's with a workspace token.
 ---
 
 # costfluent_anomalies (Data Source)
 
-List the organization's detected cost anomalies, newest first.
+List the detected cost anomalies, newest first: every workspace's with an organization token, its own workspace's with a workspace token.
 
 ## Example Usage
 
@@ -20,7 +20,7 @@ data "costfluent_anomalies" "open" {
 }
 
 output "open_anomaly_count" {
-  value = data.costfluent_anomalies.open.unacknowledged_count
+  value = length(data.costfluent_anomalies.open.anomalies)
 }
 
 output "high_severity" {
@@ -35,32 +35,32 @@ output "high_severity" {
 
 - `cloud_account_id` (String) Only anomalies in this cloud account.
 - `end_date` (String) Latest anomaly date (YYYY-MM-DD).
-- `limit` (Number) Maximum number of anomalies to return.
-- `severity` (String) Only anomalies of this severity.
+- `limit` (Number) Maximum number of anomalies to return, newest first, from 1 to 100.
+- `severity` (String) Only anomalies of this severity: low, medium, high, critical, in any case.
 - `start_date` (String) Earliest anomaly date (YYYY-MM-DD).
-- `unacknowledged_only` (Boolean) Only anomalies nobody has acknowledged.
+- `unacknowledged_only` (Boolean) Only open anomalies: none acknowledged, archived or ignored.
 
 ### Read-Only
 
 - `anomalies` (Attributes List) Detected anomalies. (see [below for nested schema](#nestedatt--anomalies))
-- `total_count` (Number) Number of anomalies that match, beyond the limit too.
-- `unacknowledged_count` (Number) Number of matching anomalies not yet acknowledged.
 
 <a id="nestedatt--anomalies"></a>
 ### Nested Schema for `anomalies`
 
 Read-Only:
 
-- `actual_cost` (Number) Actual cost.
+- `actual_cost` (String) Actual cost.
 - `anomaly_date` (String) Day the cost departed from what was expected.
 - `anomaly_type` (String) Anomaly type.
 - `currency` (String) Currency of the costs.
 - `detected_at` (String) Detection timestamp.
 - `deviation_percent` (Number) Deviation from the expected cost, in percent.
-- `expected_cost` (Number) Expected cost.
+- `expected_cost` (String) Expected cost.
 - `id` (String) Anomaly ID.
 - `is_acknowledged` (Boolean) Whether the anomaly was acknowledged.
 - `provider_id` (String) Provider the anomaly was found in.
 - `region` (String) Region, when the anomaly is regional.
 - `service_name` (String) Service whose cost departed.
 - `severity` (String) Severity level.
+- `status` (String) open, acknowledged, archived or ignored.
+- `workspace_id` (String) Workspace whose cost the anomaly is in.

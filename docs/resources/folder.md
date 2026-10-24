@@ -3,12 +3,12 @@
 page_title: "costfluent_folder Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent folder for organizing cost reports.
+  Manages a Costfluent folder for organizing cost reports. Needs a token with createFolder, viewCostReports, updateFolder and deleteFolder on the workspace.
 ---
 
 # costfluent_folder (Resource)
 
-Manages a Costfluent folder for organizing cost reports.
+Manages a Costfluent folder for organizing cost reports. Needs a token with `createFolder`, `viewCostReports`, `updateFolder` and `deleteFolder` on the workspace.
 
 ## Example Usage
 
@@ -39,10 +39,27 @@ resource "costfluent_folder" "marketing" {
 
 ### Optional
 
-- `parent_id` (String) ID of the folder this one sits in. Omit for a top-level folder; removing it recreates the folder, because the API cannot move a folder back to the top level.
-- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
+- `parent_id` (String) ID of the folder this one sits in. Omit for a top-level folder; removing it moves the same folder back to the top level.
+- `saved_filter_id` (String) ID of a saved filter in the same workspace. Every cost report in this folder and its subfolders is read through it, on top of the report's own filter. Remove it to detach the filter.
+- `workspace_id` (String) Workspace ID. When omitted, the provider's default workspace at creation is recorded and kept, so a later change to the provider's default does not move it.
 
 ### Read-Only
 
 - `id` (String) Folder ID.
 - `report_count` (Number) Number of cost reports in the folder.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# The configuration sets workspace_id: "<workspace ID>:<folder ID>". Import with that workspace,
+# because changing a configured workspace_id recreates the folder.
+terraform import costfluent_folder.teams wsp_0000000000000000000001:fld_0000000000000000000001
+
+# The configuration leaves workspace_id out: the bare folder ID imports from the provider's
+# workspace, which state then keeps.
+terraform import costfluent_folder.teams fld_0000000000000000000001
+```

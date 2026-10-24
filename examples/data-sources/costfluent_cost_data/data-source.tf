@@ -1,8 +1,8 @@
-# Daily cost for September, grouped by service.
+# Daily cost for September, grouped by service and then by the team tag.
 data "costfluent_cost_data" "by_service" {
   start_date = "2026-09-01"
   end_date   = "2026-09-30"
-  group_by   = "Service"
+  group_by   = ["ServiceName", "Tag:team"]
   limit      = 100
 }
 
@@ -13,7 +13,8 @@ output "total_cost" {
 output "daily_service_cost" {
   value = [for row in data.costfluent_cost_data.by_service.data : {
     date    = row.date
-    service = row.dimensions["Service"]
+    service = row.dimensions["ServiceName"]
+    team    = row.dimensions["Tag:team"]
     cost    = row.cost
   }]
 }
@@ -22,7 +23,7 @@ output "daily_service_cost" {
 data "costfluent_cost_data" "eu_west_q1" {
   start_date  = "2026-01-01"
   end_date    = "2026-03-31"
-  granularity = "Month"
+  granularity = "month"
   filter      = "region = 'eu-west-1'"
 }
 

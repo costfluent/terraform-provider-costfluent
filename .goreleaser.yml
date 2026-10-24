@@ -5,7 +5,8 @@ version: 2
 # anywhere else would produce names the registry silently refuses.
 project_name: terraform-provider-costfluent
 
-# The release body is the version alone; a changelog would list commit subjects verbatim.
+# The release body is the tag's message, which the release workflow passes as --release-notes. A
+# changelog would list commit subjects, and every one of them is "Bump to <version>".
 changelog:
   disable: true
 

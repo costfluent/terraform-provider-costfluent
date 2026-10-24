@@ -22,9 +22,8 @@ data "costfluent_workspace" "production" {
 resource "costfluent_budget" "prod_budget" {
   workspace_id = data.costfluent_workspace.production.id
   name         = "Production Budget"
-  amount       = 50000
+  amount       = "50000"
   currency     = data.costfluent_workspace.production.currency
-  period       = "Monthly"
 }
 
 output "workspace_currency" {
@@ -45,4 +44,5 @@ output "workspace_currency" {
 - `created_at` (String) Creation timestamp.
 - `currency` (String) Default currency.
 - `enable_automatic_syncing` (Boolean) Whether Costfluent collects from this workspace's data sources on its own schedule.
+- `time_zone` (String) IANA time zone the workspace's calendar runs in, such as Europe/Berlin.
 - `updated_at` (String) Last update timestamp.

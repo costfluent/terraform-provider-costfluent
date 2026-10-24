@@ -4,8 +4,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -18,11 +22,12 @@ import (
 var (
 	_ resource.Resource                = &SavedFilterResource{}
 	_ resource.ResourceWithConfigure   = &SavedFilterResource{}
+	_ resource.ResourceWithModifyPlan  = &SavedFilterResource{}
 	_ resource.ResourceWithImportState = &SavedFilterResource{}
 )
 
 type SavedFilterResource struct {
-	client *costfluent.Client
+	managed
 }
 
 type SavedFilterResourceModel struct {
@@ -35,16 +40,19 @@ type SavedFilterResourceModel struct {
 }
 
 func NewSavedFilterResource() resource.Resource {
-	return &SavedFilterResource{}
-}
-
-func (r *SavedFilterResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_saved_filter"
+	return &SavedFilterResource{managed{name: "saved_filter", needs: Needs{
+		Create:      []costfluent.Capability{costfluent.CapabilityCreateSavedFilter, costfluent.CapabilityViewCostReports},
+		Read:        []costfluent.Capability{costfluent.CapabilityViewCostReports},
+		Update:      []costfluent.Capability{costfluent.CapabilityUpdateSavedFilter},
+		Delete:      []costfluent.Capability{costfluent.CapabilityDeleteSavedFilter},
+		Conditional: []Conditional{{Capability: costfluent.CapabilityViewCosts, Sent: sentForCQL(path.MatchRoot("filter"))}},
+	}}}
 }
 
 func (r *SavedFilterResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Costfluent saved filter: a named cost filter expression.",
+		Description: "Manages a Costfluent saved filter: a named cost filter expression. " +
+			r.needs.sentence(),
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -54,9 +62,12 @@ func (r *SavedFilterResource) Schema(_ context.Context, _ resource.SchemaRequest
 				},
 			},
 			"workspace_id": schema.StringAttribute{
-				Optional:    true,
-				Description: "Workspace ID. Uses the provider's workspace if not specified.",
+				Optional: true,
+				Computed: true,
+				Description: "Workspace ID. When omitted, the provider's default workspace at creation " +
+					"is recorded and kept, so a later change to the provider's default does not move it.",
 				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplace(),
 				},
 				Validators: []validator.String{
@@ -68,8 +79,13 @@ func (r *SavedFilterResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Description: "Filter title.",
 			},
 			"filter": schema.StringAttribute{
-				Required:    true,
-				Description: "Cost filter expression.",
+				Required: true,
+				Description: "The cost filter as CQL text, such as `costs.provider = 'aws'`, or as its JSON document " +
+					"(build it with jsonencode). The API stores and returns the JSON document; the configured text " +
+					"is kept while it means the filter the API stores.",
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 			"is_default": schema.BoolAttribute{
 				Optional:    true,
@@ -88,24 +104,13 @@ func (r *SavedFilterResource) Schema(_ context.Context, _ resource.SchemaRequest
 	}
 }
 
-func (r *SavedFilterResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*costfluent.Client)
-	if !ok {
-		resp.Diagnostics.AddError("Unexpected Resource Configure Type", "Expected *costfluent.Client")
-		return
-	}
-	r.client = client
-}
-
 func (r *SavedFilterResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan SavedFilterResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	plan.WorkspaceID = resolvedWorkspace(r.client, plan.WorkspaceID)
 
 	filter, err := r.client.CreateSavedFilter(ctx, &costfluent.CreateSavedFilterInput{
 		WorkspaceID: plan.WorkspaceID.ValueString(),
@@ -114,12 +119,18 @@ func (r *SavedFilterResource) Create(ctx context.Context, req resource.CreateReq
 		IsDefault:   plan.IsDefault.ValueBool(),
 	})
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to create saved filter", err.Error())
+		createFailed(ctx, resp, "Failed to create saved filter", err, plan.WorkspaceID)
 		return
 	}
 
-	mapSavedFilterToModel(filter, &plan)
+	diags := mapSavedFilterToModel(ctx, r.client, filter, &plan)
+	if diags.HasError() {
+		createdButUnmapped(ctx, resp, filter.ID, diags, plan.WorkspaceID)
+		return
+	}
+	resp.Diagnostics.Append(diags...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+	resp.Diagnostics.Append(setETag(ctx, resp.Private, filter.ETag)...)
 }
 
 func (r *SavedFilterResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -128,6 +139,7 @@ func (r *SavedFilterResource) Read(ctx context.Context, req resource.ReadRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	state.WorkspaceID = resolvedWorkspace(r.client, state.WorkspaceID)
 
 	filter, err := r.client.GetSavedFilter(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
 	if costfluent.IsNotFound(err) {
@@ -135,12 +147,13 @@ func (r *SavedFilterResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to read saved filter", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to read saved filter", err)
 		return
 	}
 
-	mapSavedFilterToModel(filter, &state)
+	resp.Diagnostics.Append(mapSavedFilterToModel(ctx, r.client, filter, &state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+	resp.Diagnostics.Append(setETag(ctx, resp.Private, filter.ETag)...)
 }
 
 func (r *SavedFilterResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -162,14 +175,18 @@ func (r *SavedFilterResource) Update(ctx context.Context, req resource.UpdateReq
 		input.IsDefault = plan.IsDefault.ValueBoolPointer()
 	}
 
-	filter, err := r.client.UpdateSavedFilter(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString(), input)
+	filter, err := r.client.UpdateSavedFilter(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString(), input, ifMatch(ctx, req.Private, &resp.Diagnostics))
+	if changedOutsideTerraform(err, &resp.Diagnostics, "Saved filter", false) {
+		return
+	}
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to update saved filter", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to update saved filter", err)
 		return
 	}
 
-	mapSavedFilterToModel(filter, &plan)
+	resp.Diagnostics.Append(mapSavedFilterToModel(ctx, r.client, filter, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+	resp.Diagnostics.Append(setETag(ctx, resp.Private, filter.ETag)...)
 }
 
 func (r *SavedFilterResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -179,12 +196,12 @@ func (r *SavedFilterResource) Delete(ctx context.Context, req resource.DeleteReq
 		return
 	}
 
-	err := r.client.DeleteSavedFilter(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString())
-	if costfluent.IsNotFound(err) {
+	err := r.client.DeleteSavedFilter(ctx, state.WorkspaceID.ValueString(), state.ID.ValueString(), ifMatch(ctx, req.Private, &resp.Diagnostics))
+	if costfluent.IsNotFound(err) || changedOutsideTerraform(err, &resp.Diagnostics, "Saved filter", true) {
 		return
 	}
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to delete saved filter", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to delete saved filter", err)
 	}
 }
 
@@ -193,10 +210,23 @@ func (r *SavedFilterResource) ImportState(ctx context.Context, req resource.Impo
 	importOptionallyWorkspaceScoped(ctx, req, resp)
 }
 
-func mapSavedFilterToModel(f *costfluent.SavedFilter, model *SavedFilterResourceModel) {
+// mapSavedFilterToModel writes the stored saved filter into the model. The API returns the filter as
+// its JSON document, so a configured filter that means the stored one is kept as written.
+func mapSavedFilterToModel(
+	ctx context.Context, client *costfluent.Client, f *costfluent.SavedFilter, model *SavedFilterResourceModel,
+) diag.Diagnostics {
+	var diags diag.Diagnostics
+
+	filter, err := keepConfiguredFilter(ctx, client, model.Filter, &f.Filter)
+	if err != nil {
+		apidiag.AddError(&diags, "Failed to compare the saved filter", err)
+		return diags
+	}
+
 	model.ID = types.StringValue(f.ID)
 	model.Title = types.StringValue(f.Title)
-	model.Filter = types.StringValue(f.Filter)
+	model.Filter = filter
 	model.IsDefault = types.BoolValue(f.IsDefault)
 	model.CreatedAt = types.StringValue(f.CreatedAt.Format(time.RFC3339))
+	return diags
 }

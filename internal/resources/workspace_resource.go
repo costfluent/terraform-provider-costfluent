@@ -4,51 +4,79 @@ import (
 	"context"
 	"time"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
+	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 var (
 	_ resource.Resource                = &WorkspaceResource{}
 	_ resource.ResourceWithConfigure   = &WorkspaceResource{}
+	_ resource.ResourceWithModifyPlan  = &WorkspaceResource{}
 	_ resource.ResourceWithImportState = &WorkspaceResource{}
 )
 
 type WorkspaceResource struct {
-	client *costfluent.Client
+	managed
 }
 
 type WorkspaceResourceModel struct {
-	ID                       types.String `tfsdk:"id"`
-	Name                     types.String `tfsdk:"name"`
-	Currency                 types.String `tfsdk:"currency"`
-	EnableCurrencyConversion types.Bool   `tfsdk:"enable_currency_conversion"`
-	ConversionCurrency       types.String `tfsdk:"conversion_currency"`
-	ConversionMethod         types.String `tfsdk:"conversion_method"`
-	EnableAutomaticSyncing   types.Bool   `tfsdk:"enable_automatic_syncing"`
-	ProviderCount            types.Int64  `tfsdk:"provider_count"`
-	CreatedAt                types.String `tfsdk:"created_at"`
-	UpdatedAt                types.String `tfsdk:"updated_at"`
+	ID                             types.String `tfsdk:"id"`
+	Name                           types.String `tfsdk:"name"`
+	Currency                       types.String `tfsdk:"currency"`
+	EnableCurrencyConversion       types.Bool   `tfsdk:"enable_currency_conversion"`
+	ConversionCurrency             types.String `tfsdk:"conversion_currency"`
+	ConversionMethod               types.String `tfsdk:"conversion_method"`
+	EnableAutomaticSyncing         types.Bool   `tfsdk:"enable_automatic_syncing"`
+	TimeZone                       types.String `tfsdk:"time_zone"`
+	ReportDefaults                 types.Object `tfsdk:"report_defaults"`
+	AnomaliesExcludeMarketplace    types.Bool   `tfsdk:"anomalies_exclude_marketplace"`
+	AnomaliesExcludeCommitmentFees types.Bool   `tfsdk:"anomalies_exclude_commitment_fees"`
+	AnomalyNotificationThreshold   types.String `tfsdk:"anomaly_notification_threshold"`
+	ProviderCount                  types.Int64  `tfsdk:"provider_count"`
+	CreatedAt                      types.String `tfsdk:"created_at"`
+	UpdatedAt                      types.String `tfsdk:"updated_at"`
+}
+
+// reportDefaultsAttrTypes is what a new cost report in the workspace starts from.
+var reportDefaultsAttrTypes = map[string]attr.Type{
+	"date_interval":          types.StringType,
+	"date_bin":               types.StringType,
+	"include_credits":        types.BoolType,
+	"include_refunds":        types.BoolType,
+	"include_tax":            types.BoolType,
+	"amortize":               types.BoolType,
+	"show_forecast":          types.BoolType,
+	"compare_to_last_period": types.BoolType,
 }
 
 func NewWorkspaceResource() resource.Resource {
-	return &WorkspaceResource{}
-}
-
-func (r *WorkspaceResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_workspace"
+	return &WorkspaceResource{managed{name: "workspace", needs: Needs{
+		Organization: true,
+		Create:       []costfluent.Capability{costfluent.CapabilityCreateWorkspace, costfluent.CapabilityViewWorkspace},
+		Read:         []costfluent.Capability{costfluent.CapabilityViewWorkspace},
+		Update:       []costfluent.Capability{costfluent.CapabilityUpdateWorkspace},
+		Delete:       []costfluent.Capability{costfluent.CapabilityDeleteWorkspace},
+		Conditional:  []Conditional{{Capability: costfluent.CapabilityUpdateWorkspace, Sent: workspaceSettingsSent}},
+	}}}
 }
 
 func (r *WorkspaceResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Costfluent workspace.",
+		Description: "Manages a Costfluent workspace. " +
+			r.needs.sentence(),
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -96,6 +124,62 @@ func (r *WorkspaceResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 					"false, the recurring collection is skipped for every source no other workspace still " +
 					"syncs; stored cost data and an explicitly requested sync are unaffected.",
 			},
+			"time_zone": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString("UTC"),
+				Description: "IANA time zone the workspace's calendar runs in, such as Europe/Berlin: when its day " +
+					"and its budget periods begin, and the default zone of its report notifications. Costs keep " +
+					"the provider's UTC billing day, and absolute and percentageIncrease cost alerts measure only " +
+					"those days that have settled.",
+			},
+			"anomalies_exclude_marketplace": schema.BoolAttribute{
+				Optional:    true,
+				Computed:    true,
+				Default:     booldefault.StaticBool(true),
+				Description: "Leave marketplace charges out of anomaly detection.",
+			},
+			"anomalies_exclude_commitment_fees": schema.BoolAttribute{
+				Optional:    true,
+				Computed:    true,
+				Default:     booldefault.StaticBool(true),
+				Description: "Leave commitment fees, reservation and Savings Plan purchases and fees, out of anomaly detection.",
+			},
+			"anomaly_notification_threshold": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString("0"),
+				Description: "The smallest increase over its baseline, in the workspace currency and as a decimal " +
+					"string (\"250\"), an anomaly must reach to be notified. \"0\" notifies every anomaly.",
+				Validators: []validator.String{
+					validators.Decimal(),
+				},
+			},
+			"report_defaults": schema.SingleNestedAttribute{
+				Optional: true,
+				Computed: true,
+				Description: "What a new cost report in the workspace starts from for every part its own " +
+					"configuration leaves out. Each attribute left unset keeps the workspace's current value.",
+				PlanModifiers: []planmodifier.Object{objectplanmodifier.UseStateForUnknown()},
+				Attributes: map[string]schema.Attribute{
+					"date_interval": schema.StringAttribute{
+						Optional:    true,
+						Computed:    true,
+						Description: "A relative date range such as thisMonth or last30Days; never custom.",
+					},
+					"date_bin": schema.StringAttribute{
+						Optional:    true,
+						Computed:    true,
+						Description: "The granularity: day, week, month, quarter or cumulative.",
+					},
+					"include_credits":        schema.BoolAttribute{Optional: true, Computed: true},
+					"include_refunds":        schema.BoolAttribute{Optional: true, Computed: true},
+					"include_tax":            schema.BoolAttribute{Optional: true, Computed: true},
+					"amortize":               schema.BoolAttribute{Optional: true, Computed: true},
+					"show_forecast":          schema.BoolAttribute{Optional: true, Computed: true},
+					"compare_to_last_period": schema.BoolAttribute{Optional: true, Computed: true},
+				},
+			},
 			"provider_count": schema.Int64Attribute{
 				Computed:    true,
 				Description: "Number of providers connected to the workspace.",
@@ -112,18 +196,6 @@ func (r *WorkspaceResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 	}
 }
 
-func (r *WorkspaceResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*costfluent.Client)
-	if !ok {
-		resp.Diagnostics.AddError("Unexpected Resource Configure Type", "Expected *costfluent.Client")
-		return
-	}
-	r.client = client
-}
-
 func (r *WorkspaceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan WorkspaceResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -134,26 +206,36 @@ func (r *WorkspaceResource) Create(ctx context.Context, req resource.CreateReque
 	input := &costfluent.CreateWorkspaceInput{
 		Name:     plan.Name.ValueString(),
 		Currency: plan.Currency.ValueString(),
+		TimeZone: plan.TimeZone.ValueString(),
 	}
 
 	workspace, err := r.client.CreateWorkspace(ctx, input)
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to create workspace", err.Error())
+		createFailed(ctx, resp, "Failed to create workspace", err, types.StringNull())
+		return
+	}
+	// In state before the settings update, so a failure there leaves a tainted workspace Terraform
+	// replaces, not one no state knows of.
+	created := plan
+	mapWorkspaceToModel(workspace, &created)
+	resp.Diagnostics.Append(resp.State.Set(ctx, created)...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Create takes a name and a currency only, so the remaining settings are applied as an update
+	// Create takes a name, a currency and a zone only, so the remaining settings are applied as an update
 	// when the configuration asks for anything other than the defaults a new workspace starts on.
 	if update := settingsInput(&plan, workspace); update != nil {
 		workspace, err = r.client.UpdateWorkspace(ctx, workspace.ID, update)
 		if err != nil {
-			resp.Diagnostics.AddError("Failed to apply workspace settings", err.Error())
+			apidiag.AddError(&resp.Diagnostics, "Failed to apply workspace settings", err)
 			return
 		}
 	}
 
 	mapWorkspaceToModel(workspace, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+	resp.Diagnostics.Append(setETag(ctx, resp.Private, workspace.ETag)...)
 }
 
 func (r *WorkspaceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -169,12 +251,13 @@ func (r *WorkspaceResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to read workspace", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to read workspace", err)
 		return
 	}
 
 	mapWorkspaceToModel(workspace, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+	resp.Diagnostics.Append(setETag(ctx, resp.Private, workspace.ETag)...)
 }
 
 func (r *WorkspaceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -198,27 +281,49 @@ func (r *WorkspaceResource) Update(ctx context.Context, req resource.UpdateReque
 		enabled := plan.EnableCurrencyConversion.ValueBool()
 		input.EnableCurrencyConversion = &enabled
 	}
-	if !plan.ConversionCurrency.Equal(state.ConversionCurrency) && !plan.ConversionCurrency.IsNull() {
-		cur := plan.ConversionCurrency.ValueString()
-		input.ConversionCurrency = &cur
+	// Unset, conversion_currency is unknown in the plan, and the API refuses an empty one.
+	if !plan.ConversionCurrency.Equal(state.ConversionCurrency) {
+		input.ConversionCurrency = knownString(plan.ConversionCurrency)
 	}
-	if !plan.ConversionMethod.Equal(state.ConversionMethod) && !plan.ConversionMethod.IsNull() {
-		method := plan.ConversionMethod.ValueString()
-		input.ConversionMethod = &method
+	if !plan.ConversionMethod.Equal(state.ConversionMethod) {
+		input.ConversionMethod = knownString(plan.ConversionMethod)
 	}
 	if !plan.EnableAutomaticSyncing.Equal(state.EnableAutomaticSyncing) {
 		syncing := plan.EnableAutomaticSyncing.ValueBool()
 		input.EnableAutomaticSyncing = &syncing
 	}
+	if !plan.TimeZone.Equal(state.TimeZone) {
+		input.TimeZone = knownString(plan.TimeZone)
+	}
+	if !plan.ReportDefaults.Equal(state.ReportDefaults) {
+		input.ReportDefaults = reportDefaultsInput(plan.ReportDefaults)
+	}
+	if !plan.AnomaliesExcludeMarketplace.Equal(state.AnomaliesExcludeMarketplace) {
+		exclude := plan.AnomaliesExcludeMarketplace.ValueBool()
+		input.AnomaliesExcludeMarketplace = &exclude
+	}
+	if !plan.AnomaliesExcludeCommitmentFees.Equal(state.AnomaliesExcludeCommitmentFees) {
+		exclude := plan.AnomaliesExcludeCommitmentFees.ValueBool()
+		input.AnomaliesExcludeCommitmentFees = &exclude
+	}
+	if !plan.AnomalyNotificationThreshold.IsUnknown() &&
+		!sameDecimal(plan.AnomalyNotificationThreshold, state.AnomalyNotificationThreshold) {
+		threshold := costfluent.Decimal(plan.AnomalyNotificationThreshold.ValueString())
+		input.AnomalyNotificationThreshold = &threshold
+	}
 
-	workspace, err := r.client.UpdateWorkspace(ctx, state.ID.ValueString(), input)
+	workspace, err := r.client.UpdateWorkspace(ctx, state.ID.ValueString(), input, ifMatch(ctx, req.Private, &resp.Diagnostics))
+	if changedOutsideTerraform(err, &resp.Diagnostics, "Workspace", false) {
+		return
+	}
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to update workspace", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to update workspace", err)
 		return
 	}
 
 	mapWorkspaceToModel(workspace, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+	resp.Diagnostics.Append(setETag(ctx, resp.Private, workspace.ETag)...)
 }
 
 func (r *WorkspaceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -228,17 +333,41 @@ func (r *WorkspaceResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	err := r.client.DeleteWorkspace(ctx, state.ID.ValueString())
-	if costfluent.IsNotFound(err) {
+	err := r.client.DeleteWorkspace(ctx, state.ID.ValueString(), ifMatch(ctx, req.Private, &resp.Diagnostics))
+	if costfluent.IsNotFound(err) || changedOutsideTerraform(err, &resp.Diagnostics, "Workspace", true) {
 		return
 	}
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to delete workspace", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to delete workspace", err)
 	}
 }
 
 func (r *WorkspaceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// workspaceSettings are the attributes a create does not take, so a configuration that names one
+// is applied by an update right after the create.
+var workspaceSettings = []string{
+	"enable_currency_conversion", "conversion_currency", "conversion_method", "enable_automatic_syncing",
+	"report_defaults", "anomalies_exclude_marketplace", "anomalies_exclude_commitment_fees", "anomaly_notification_threshold",
+}
+
+// workspaceSettingsSent is whether a plan sends updateWorkspace: every update does, and a create
+// does when the configuration names a setting the create does not take. A named setting equal to
+// the default is counted too; requiring the capability then refuses a token that could have
+// applied the plan, never admits one that cannot.
+func workspaceSettingsSent(ctx context.Context, req resource.ModifyPlanRequest, creating bool) (bool, diag.Diagnostics) {
+	if !creating {
+		return true, nil
+	}
+	for _, name := range workspaceSettings {
+		var value attr.Value
+		if diags := req.Config.GetAttribute(ctx, path.Root(name), &value); diags.HasError() || !value.IsNull() {
+			return true, diags
+		}
+	}
+	return false, nil
 }
 
 // settingsInput is the update a freshly created workspace needs, or nil when the configuration
@@ -270,10 +399,70 @@ func settingsInput(plan *WorkspaceResourceModel, ws *costfluent.Workspace) *cost
 		changed = true
 	}
 
+	if defaults := reportDefaultsInput(plan.ReportDefaults); defaults != nil {
+		input.ReportDefaults = defaults
+		changed = true
+	}
+	if !plan.AnomaliesExcludeMarketplace.IsUnknown() && plan.AnomaliesExcludeMarketplace.ValueBool() != ws.AnomaliesExcludeMarketplace {
+		exclude := plan.AnomaliesExcludeMarketplace.ValueBool()
+		input.AnomaliesExcludeMarketplace = &exclude
+		changed = true
+	}
+	if !plan.AnomaliesExcludeCommitmentFees.IsUnknown() && plan.AnomaliesExcludeCommitmentFees.ValueBool() != ws.AnomaliesExcludeCommitmentFees {
+		exclude := plan.AnomaliesExcludeCommitmentFees.ValueBool()
+		input.AnomaliesExcludeCommitmentFees = &exclude
+		changed = true
+	}
+	if !plan.AnomalyNotificationThreshold.IsNull() && !plan.AnomalyNotificationThreshold.IsUnknown() &&
+		!costfluent.Decimal(plan.AnomalyNotificationThreshold.ValueString()).Equal(ws.AnomalyNotificationThreshold) {
+		threshold := costfluent.Decimal(plan.AnomalyNotificationThreshold.ValueString())
+		input.AnomalyNotificationThreshold = &threshold
+		changed = true
+	}
+
 	if !changed {
 		return nil
 	}
 	return input
+}
+
+// reportDefaultsInput sends the parts of report_defaults the configuration names; nil when it
+// names none, so the workspace keeps its current defaults.
+func reportDefaultsInput(value types.Object) *costfluent.ReportDefaultsInput {
+	if value.IsNull() || value.IsUnknown() {
+		return nil
+	}
+
+	attrs := value.Attributes()
+	input := &costfluent.ReportDefaultsInput{
+		DateInterval:        knownStringAttr(attrs["date_interval"]),
+		DateBin:             knownStringAttr(attrs["date_bin"]),
+		IncludeCredits:      knownBoolAttr(attrs["include_credits"]),
+		IncludeRefunds:      knownBoolAttr(attrs["include_refunds"]),
+		IncludeTax:          knownBoolAttr(attrs["include_tax"]),
+		Amortize:            knownBoolAttr(attrs["amortize"]),
+		ShowForecast:        knownBoolAttr(attrs["show_forecast"]),
+		CompareToLastPeriod: knownBoolAttr(attrs["compare_to_last_period"]),
+	}
+	if *input == (costfluent.ReportDefaultsInput{}) {
+		return nil
+	}
+	return input
+}
+
+func knownStringAttr(value attr.Value) *string {
+	if s, ok := value.(types.String); ok {
+		return knownString(s)
+	}
+	return nil
+}
+
+func knownBoolAttr(value attr.Value) *bool {
+	if b, ok := value.(types.Bool); ok && !b.IsNull() && !b.IsUnknown() {
+		v := b.ValueBool()
+		return &v
+	}
+	return nil
 }
 
 func derefString(value *string) string {
@@ -286,14 +475,31 @@ func derefString(value *string) string {
 func mapWorkspaceToModel(ws *costfluent.Workspace, model *WorkspaceResourceModel) {
 	model.ID = types.StringValue(ws.ID)
 	model.Name = types.StringValue(ws.Name)
-	model.Currency = types.StringValue(ws.Currency)
+	model.Currency = sameEnum(model.Currency, ws.Currency)
 	model.EnableCurrencyConversion = types.BoolValue(ws.EnableCurrencyConversion)
-	model.ConversionMethod = types.StringValue(ws.ConversionMethod)
+	model.ConversionMethod = sameEnum(model.ConversionMethod, ws.ConversionMethod)
 	model.EnableAutomaticSyncing = types.BoolValue(ws.EnableAutomaticSyncing)
+	model.TimeZone = sameTimeZone(model.TimeZone, ws.TimeZone)
+	configuredDefaults := model.ReportDefaults.Attributes()
+	dateInterval, _ := configuredDefaults["date_interval"].(types.String)
+	dateBin, _ := configuredDefaults["date_bin"].(types.String)
+	model.ReportDefaults = types.ObjectValueMust(reportDefaultsAttrTypes, map[string]attr.Value{
+		"date_interval":          sameEnum(dateInterval, ws.ReportDefaults.DateInterval),
+		"date_bin":               sameEnum(dateBin, ws.ReportDefaults.DateBin),
+		"include_credits":        types.BoolValue(ws.ReportDefaults.IncludeCredits),
+		"include_refunds":        types.BoolValue(ws.ReportDefaults.IncludeRefunds),
+		"include_tax":            types.BoolValue(ws.ReportDefaults.IncludeTax),
+		"amortize":               types.BoolValue(ws.ReportDefaults.Amortize),
+		"show_forecast":          types.BoolValue(ws.ReportDefaults.ShowForecast),
+		"compare_to_last_period": types.BoolValue(ws.ReportDefaults.CompareToLastPeriod),
+	})
+	model.AnomaliesExcludeMarketplace = types.BoolValue(ws.AnomaliesExcludeMarketplace)
+	model.AnomaliesExcludeCommitmentFees = types.BoolValue(ws.AnomaliesExcludeCommitmentFees)
+	model.AnomalyNotificationThreshold = keepDecimal(model.AnomalyNotificationThreshold, ws.AnomalyNotificationThreshold)
 	model.ProviderCount = types.Int64Value(int64(ws.ProviderCount))
 
 	if ws.ConversionCurrency != nil {
-		model.ConversionCurrency = types.StringValue(*ws.ConversionCurrency)
+		model.ConversionCurrency = sameEnum(model.ConversionCurrency, *ws.ConversionCurrency)
 	} else {
 		model.ConversionCurrency = types.StringNull()
 	}

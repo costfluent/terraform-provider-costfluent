@@ -3,26 +3,30 @@
 page_title: "costfluent_saved_filter Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages a Costfluent saved filter: a named cost filter expression.
+  Manages a Costfluent saved filter: a named cost filter expression. Needs a token with createSavedFilter, viewCostReports, updateSavedFilter, deleteSavedFilter and viewCosts on the workspace.
 ---
 
 # costfluent_saved_filter (Resource)
 
-Manages a Costfluent saved filter: a named cost filter expression.
+Manages a Costfluent saved filter: a named cost filter expression. Needs a token with `createSavedFilter`, `viewCostReports`, `updateSavedFilter`, `deleteSavedFilter` and `viewCosts` on the workspace.
 
 ## Example Usage
 
 ```terraform
-# Production environment filter
+# A saved filter written as CQL text. The API stores and returns it as its JSON document; the
+# configured text stays in state while it means the stored filter.
 resource "costfluent_saved_filter" "production" {
   title  = "Production Only"
-  filter = "tag:Environment = 'production'"
+  filter = "tags->>'Environment' = 'production'"
 }
 
-# AWS compute filter, the workspace's default
+# AWS compute filter, the workspace's default, written as the JSON document
 resource "costfluent_saved_filter" "aws_compute" {
-  title      = "AWS Compute"
-  filter     = "provider = 'aws' AND service = 'Amazon EC2'"
+  title = "AWS Compute"
+  filter = jsonencode([
+    { field = "Provider", operator = "In", values = ["aws"] },
+    { field = "ServiceName", operator = "In", values = ["Amazon Elastic Compute Cloud"] },
+  ])
   is_default = true
 }
 ```
@@ -32,15 +36,31 @@ resource "costfluent_saved_filter" "aws_compute" {
 
 ### Required
 
-- `filter` (String) Cost filter expression.
+- `filter` (String) The cost filter as CQL text, such as `costs.provider = 'aws'`, or as its JSON document (build it with jsonencode). The API stores and returns the JSON document; the configured text is kept while it means the filter the API stores.
 - `title` (String) Filter title.
 
 ### Optional
 
 - `is_default` (Boolean) Whether this is the workspace's default filter.
-- `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified.
+- `workspace_id` (String) Workspace ID. When omitted, the provider's default workspace at creation is recorded and kept, so a later change to the provider's default does not move it.
 
 ### Read-Only
 
 - `created_at` (String) Creation timestamp.
 - `id` (String) Saved filter ID.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# The configuration sets workspace_id: "<workspace ID>:<saved filter ID>". Import with that
+# workspace, because changing a configured workspace_id recreates the saved filter.
+terraform import costfluent_saved_filter.production wsp_0000000000000000000001:flt_0000000000000000000001
+
+# The configuration leaves workspace_id out: the bare saved filter ID imports from the provider's
+# workspace, which state then keeps.
+terraform import costfluent_saved_filter.production flt_0000000000000000000001
+```

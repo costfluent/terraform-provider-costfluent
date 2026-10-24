@@ -95,3 +95,38 @@ func TestCreateProviderGcpAccessPendingCarriesItsCode(t *testing.T) {
 		t.Fatal("matched a code the response did not carry")
 	}
 }
+
+func TestProviderKeysMatchTheContract(t *testing.T) {
+	wantContractValues(t, "ProviderKey", ProviderKeys())
+}
+
+func TestProviderStatusesMatchTheContract(t *testing.T) {
+	wantContractValues(t, "ProviderStatus", ProviderStatuses())
+}
+
+// The capabilities are compared by their wire values: /v1/me sends them, and a client compares them.
+func TestCapabilitiesMatchTheContract(t *testing.T) {
+	wantContractValues(t, "ApiTokenCapability", Capabilities())
+}
+
+func wantContractValues[T ~string](t *testing.T, schema string, values []T) {
+	t.Helper()
+	declared := loadSpec(t).Components.Schemas[schema]
+	if declared == nil {
+		t.Fatalf("the Public API spec declares no %s", schema)
+	}
+	// An extensible enum declares its wire values; a closed one its names, which the API reads
+	// case-insensitively.
+	want := declared.Extensible
+	if len(want) == 0 {
+		want = declared.EnumNames
+	}
+	if len(values) != len(want) {
+		t.Fatalf("SDK has %d %s values %v, the contract %d %v", len(values), schema, values, len(want), want)
+	}
+	for i, value := range values {
+		if string(value) != want[i] {
+			t.Errorf("%s value %d is %q, the contract says %q", schema, i, value, want[i])
+		}
+	}
+}

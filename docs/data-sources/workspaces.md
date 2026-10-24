@@ -45,4 +45,5 @@ Read-Only:
 - `currency` (String) Default currency.
 - `id` (String) Workspace ID.
 - `name` (String) Workspace name.
+- `time_zone` (String) IANA time zone the workspace's calendar runs in, such as Europe/Berlin.
 - `updated_at` (String) Last update timestamp.

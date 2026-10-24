@@ -58,9 +58,10 @@ output "production_amortized" {
 
 ### Read-Only
 
-- `cost_change` (Number) Absolute change against the previous window of the same length.
-- `cost_change_percent` (Number) Percentage change against the previous window of the same length.
-- `currency` (String) Currency code.
-- `total_amortized_cost` (Number) Total amortized cost.
-- `total_cost` (Number) Total cost for the window.
-- `total_list_cost` (Number) Total cost at list prices.
+- `compared_through` (String) The settled day (YYYY-MM-DD) the change is compared through, because the last days of a window ending today are still arriving. Null when the two windows are compared whole.
+- `cost_change` (String) Absolute change against the previous window of the same length. When the window runs past compared_through, its days through that day against as many days from the start of the previous window.
+- `cost_change_percent` (Number) Percentage change, compared as cost_change is. Null when the previous window was not compared, or the window has no settled day yet.
+- `currency` (String) Currency code. Null when the window mixes currencies.
+- `total_amortized_cost` (String) Total amortized cost.
+- `total_cost` (String) Total cost for the window.
+- `total_list_cost` (String) Total cost at list prices.

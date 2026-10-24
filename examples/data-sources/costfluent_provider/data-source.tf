@@ -7,7 +7,7 @@ data "costfluent_provider" "aws_main" {
 resource "costfluent_cost_alert" "aws_only" {
   name            = "AWS daily spend"
   threshold_type  = "absolute"
-  threshold_value = 500
+  threshold_value = "500"
   provider_ids    = [data.costfluent_provider.aws_main.id]
 }
 

@@ -4,12 +4,13 @@ import (
 	"context"
 	"strings"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
+	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -58,19 +59,6 @@ func (boolRequiresReplace) PlanModifyBool(
 	}
 }
 
-// requiresReplaceWhenRemoved replaces the resource when an optional reference is removed. The API
-// reads an omitted reference as "leave it as it is", so an update cannot clear one.
-func requiresReplaceWhenRemoved(attribute string) planmodifier.String {
-	description := "Removing " + attribute + " recreates the resource, because the API cannot clear it."
-	return stringplanmodifier.RequiresReplaceIf(
-		func(_ context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
-			resp.RequiresReplace = !req.StateValue.IsNull() && req.PlanValue.IsNull()
-		},
-		description,
-		description,
-	)
-}
-
 // importOptionallyWorkspaceScoped imports "<workspace ID>:<ID>", or a bare ID that is then read in
 // the provider's workspace.
 func importOptionallyWorkspaceScoped(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -82,19 +70,32 @@ func importOptionallyWorkspaceScoped(ctx context.Context, req resource.ImportSta
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-// listRequiresReplaceWhenEmptied is requiresReplaceWhenRemoved for a list: an omitted or empty
-// list reads as "leave it as it is", so an update cannot empty one.
-func listRequiresReplaceWhenEmptied(attribute string) planmodifier.List {
-	description := "Emptying " + attribute + " recreates the resource, because the API cannot clear it."
-	return listplanmodifier.RequiresReplaceIf(
-		func(_ context.Context, req planmodifier.ListRequest, resp *listplanmodifier.RequiresReplaceIfFuncResponse) {
-			hadElements := !req.StateValue.IsNull() && len(req.StateValue.Elements()) > 0
-			empty := req.PlanValue.IsNull() || (!req.PlanValue.IsUnknown() && len(req.PlanValue.Elements()) == 0)
-			resp.RequiresReplace = hadElements && empty
-		},
-		description,
-		description,
-	)
+// createFailed reports a failed create. When the API created the object and only the read back
+// failed, it keeps the object in state through keepCreated.
+func createFailed(ctx context.Context, resp *resource.CreateResponse, summary string, err error, workspaceID types.String) {
+	if id, ok := costfluent.CreatedID(err); ok {
+		keepCreated(ctx, resp, id, workspaceID)
+	}
+	apidiag.AddError(&resp.Diagnostics, summary, err)
+}
+
+// createdButUnmapped reports the diagnostics of writing an object the API has just created into
+// state, and keeps the object in state through keepCreated.
+func createdButUnmapped(
+	ctx context.Context, resp *resource.CreateResponse, id string, diags diag.Diagnostics, workspaceID types.String,
+) {
+	keepCreated(ctx, resp, id, workspaceID)
+	resp.Diagnostics.Append(diags...)
+}
+
+// keepCreated writes the ID of an object a failed create left behind into state, and workspace_id
+// when the schema has one because Delete sends it, so Terraform holds the object as tainted and
+// replaces it on the next apply instead of creating a duplicate beside an object nothing manages.
+func keepCreated(ctx context.Context, resp *resource.CreateResponse, id string, workspaceID types.String) {
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
+	if !workspaceID.IsNull() && !workspaceID.IsUnknown() {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("workspace_id"), workspaceID)...)
+	}
 }
 
 // sameEnum keeps the configured spelling of an enum the API returns in another case. The API
@@ -102,6 +103,16 @@ func listRequiresReplaceWhenEmptied(attribute string) planmodifier.List {
 // must not plan a change against the `previousWeek` the API returns.
 func sameEnum(configured types.String, returned string) types.String {
 	if !configured.IsNull() && !configured.IsUnknown() && strings.EqualFold(configured.ValueString(), returned) {
+		return configured
+	}
+	return types.StringValue(returned)
+}
+
+// sameTimeZone keeps the configured spelling of the zone the API stores under its own id: the API
+// trims a zone and can answer a case variant in its canonical case. An alias such as US/Eastern is
+// an id of its own there, so only spelling is folded, never one zone into another.
+func sameTimeZone(configured types.String, returned string) types.String {
+	if !configured.IsNull() && !configured.IsUnknown() && strings.EqualFold(strings.TrimSpace(configured.ValueString()), returned) {
 		return configured
 	}
 	return types.StringValue(returned)

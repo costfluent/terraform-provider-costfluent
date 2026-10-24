@@ -4,47 +4,51 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 )
 
-// Anomaly is a day on which a provider's cost for one service departed from what was expected
+// Anomaly is a day on which a provider's cost for one service rose unusually, in one workspace
 type Anomaly struct {
-	ID               string     `json:"id"`
-	ProviderID       string     `json:"providerId"`
-	AnomalyDate      string     `json:"anomalyDate"`
-	ServiceName      string     `json:"serviceName"`
-	Region           *string    `json:"region,omitempty"`
-	AnomalyType      string     `json:"anomalyType"`
-	Severity         string     `json:"severity"`
-	ExpectedCost     float64    `json:"expectedCost"`
-	ActualCost       float64    `json:"actualCost"`
-	DeviationPercent float64    `json:"deviationPercent"`
-	Description      *string    `json:"description,omitempty"`
-	Currency         string     `json:"currency"`
-	IsAcknowledged   bool       `json:"isAcknowledged"`
-	AcknowledgedAt   *time.Time `json:"acknowledgedAt,omitempty"`
-	DetectedAt       time.Time  `json:"detectedAt"`
+	ID string `json:"id"`
+	// WorkspaceID is the workspace whose cost the anomaly is in; a provider in two workspaces has an anomaly in each
+	WorkspaceID      string  `json:"workspaceId"`
+	ProviderID       string  `json:"providerId"`
+	AnomalyDate      string  `json:"anomalyDate"`
+	ServiceName      string  `json:"serviceName"`
+	Region           *string `json:"region,omitempty"`
+	AnomalyType      string  `json:"anomalyType"`
+	Severity         string  `json:"severity"`
+	ExpectedCost     Decimal `json:"expectedCost"`
+	ActualCost       Decimal `json:"actualCost"`
+	DeviationPercent float64 `json:"deviationPercent"`
+	Description      *string `json:"description,omitempty"`
+	Currency         string  `json:"currency"`
+	// Status is open, acknowledged, archived or ignored
+	Status string `json:"status"`
+	// StatusReason is why detection archived the anomaly by itself: expired or restated
+	StatusReason *string `json:"statusReason,omitempty"`
+	// IgnoreReason is the reason given for ignoring the anomaly
+	IgnoreReason   *string    `json:"ignoreReason,omitempty"`
+	IsAcknowledged bool       `json:"isAcknowledged"`
+	AcknowledgedAt *time.Time `json:"acknowledgedAt,omitempty"`
+	DetectedAt     time.Time  `json:"detectedAt"`
 }
 
-// AnomalyList is the most recent anomalies that match, with the counts across all of them
-type AnomalyList struct {
-	Data                []Anomaly `json:"data"`
-	TotalCount          int       `json:"totalCount"`
-	UnacknowledgedCount int       `json:"unacknowledgedCount"`
-}
+// AnomalyList is one page of the anomalies that match, newest first
+type AnomalyList = ListResponse[Anomaly]
 
 // ListAnomaliesOptions narrows an anomaly listing. Dates are calendar days, YYYY-MM-DD.
 type ListAnomaliesOptions struct {
-	CloudAccountID     string
-	Severity           string
+	CloudAccountID string
+	Severity       string
+	// UnacknowledgedOnly lists only open anomalies
 	UnacknowledgedOnly bool
 	StartDate          string
 	EndDate            string
-	Limit              int
+	PageOptions
 }
 
-// ListAnomalies returns detected anomalies, newest first
+// ListAnomalies returns one page of detected anomalies, newest first
 func (c *Client) ListAnomalies(ctx context.Context, opts *ListAnomaliesOptions) (*AnomalyList, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, "/v1/anomalies", nil)
 	if err != nil {
@@ -60,10 +64,8 @@ func (c *Client) ListAnomalies(ctx context.Context, opts *ListAnomaliesOptions) 
 		}
 		setIf(q, "startDate", opts.StartDate)
 		setIf(q, "endDate", opts.EndDate)
-		if opts.Limit > 0 {
-			q.Set("limit", strconv.Itoa(opts.Limit))
-		}
 		req.URL.RawQuery = q.Encode()
+		opts.apply(req)
 	}
 
 	var resp AnomalyList

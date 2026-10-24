@@ -22,7 +22,7 @@ data "costfluent_provider" "aws_main" {
 resource "costfluent_cost_alert" "aws_only" {
   name            = "AWS daily spend"
   threshold_type  = "absolute"
-  threshold_value = 500
+  threshold_value = "500"
   provider_ids    = [data.costfluent_provider.aws_main.id]
 }
 
@@ -41,7 +41,7 @@ output "last_sync" {
 ### Optional
 
 - `id` (String) Provider ID. Either id or name must be specified.
-- `name` (String) Provider name. Either id or name must be specified.
+- `name` (String) Provider name. Either id or name must be specified. A provider connected without a name is named after its type (`Amazon Web Services`), so several can share one; a name several providers share is refused, and id picks one of them.
 
 ### Read-Only
 

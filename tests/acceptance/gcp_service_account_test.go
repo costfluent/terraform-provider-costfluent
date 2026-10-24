@@ -9,7 +9,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
+// Provisioning creates a real service account in the environment's GCP connect project, so it runs
+// only against a deployment wired to GCP, the one the GCP connection test below names.
 func TestAccGcpServiceAccount_basic(t *testing.T) {
+	if os.Getenv("COSTFLUENT_ACC_GCP_PROJECT_ID") == "" {
+		t.Skip("COSTFLUENT_ACC_GCP_PROJECT_ID must be set")
+	}
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -32,7 +37,7 @@ func TestAccGcpServiceAccount_basic(t *testing.T) {
 }
 
 // A GCP connection needs a billing export shared with the organization's service account, which
-// only the dogfood dataset has; it runs when its three values are set.
+// only a dataset prepared for this test has; it runs when its three values are set.
 func TestAccProvider_gcp(t *testing.T) {
 	billingAccount := os.Getenv("COSTFLUENT_ACC_GCP_BILLING_ACCOUNT_ID")
 	project := os.Getenv("COSTFLUENT_ACC_GCP_PROJECT_ID")

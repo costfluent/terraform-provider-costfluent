@@ -1,6 +1,7 @@
 package costfluent
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 )
@@ -68,3 +69,23 @@ func listAll[T any](pageSize int, list func(*PageOptions) (*ListResponse[T], err
 		}
 	}
 }
+
+// listWorkspace walks every page of a workspace-scoped listing, in the order the API returns it.
+func listWorkspace[T any](c *Client, ctx context.Context, path, workspaceID string) ([]T, error) {
+	return listAll(maxPageSize, func(p *PageOptions) (*ListResponse[T], error) {
+		req, err := c.newWorkspaceRequest(ctx, http.MethodGet, path, workspaceID, nil)
+		if err != nil {
+			return nil, err
+		}
+		p.apply(req)
+
+		var resp ListResponse[T]
+		if err := c.do(req, &resp); err != nil {
+			return nil, err
+		}
+		return &resp, nil
+	})
+}
+
+// maxPageSize is the largest page the API serves.
+const maxPageSize = 100

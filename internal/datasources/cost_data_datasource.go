@@ -2,11 +2,17 @@ package datasources
 
 import (
 	"context"
+	"strings"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -18,35 +24,40 @@ type CostDataDataSource struct {
 }
 
 type CostDataDataSourceModel struct {
-	WorkspaceID  types.String  `tfsdk:"workspace_id"`
-	StartDate    types.String  `tfsdk:"start_date"`
-	EndDate      types.String  `tfsdk:"end_date"`
-	Granularity  types.String  `tfsdk:"granularity"`
-	GroupBy      types.String  `tfsdk:"group_by"`
-	Filter       types.String  `tfsdk:"filter"`
-	Limit        types.Int64   `tfsdk:"limit"`
-	Data         types.List    `tfsdk:"data"`
-	TotalCost    types.Float64 `tfsdk:"total_cost"`
-	TotalRecords types.Int64   `tfsdk:"total_records"`
-	Currency     types.String  `tfsdk:"currency"`
+	WorkspaceID  types.String `tfsdk:"workspace_id"`
+	StartDate    types.String `tfsdk:"start_date"`
+	EndDate      types.String `tfsdk:"end_date"`
+	Granularity  types.String `tfsdk:"granularity"`
+	GroupBy      types.List   `tfsdk:"group_by"`
+	Filter       types.String `tfsdk:"filter"`
+	Measure      types.String `tfsdk:"measure"`
+	Limit        types.Int64  `tfsdk:"limit"`
+	Data         types.List   `tfsdk:"data"`
+	TotalCost    types.String `tfsdk:"total_cost"`
+	TotalRecords types.Int64  `tfsdk:"total_records"`
+	Currency     types.String `tfsdk:"currency"`
 }
 
 type CostDataRowModel struct {
 	Date          types.String  `tfsdk:"date"`
 	Dimensions    types.Map     `tfsdk:"dimensions"`
-	Cost          types.Float64 `tfsdk:"cost"`
-	ListCost      types.Float64 `tfsdk:"list_cost"`
-	AmortizedCost types.Float64 `tfsdk:"amortized_cost"`
+	Cost          types.String  `tfsdk:"cost"`
+	ListCost      types.String  `tfsdk:"list_cost"`
+	AmortizedCost types.String  `tfsdk:"amortized_cost"`
 	Currency      types.String  `tfsdk:"currency"`
+	Quantity      types.Float64 `tfsdk:"quantity"`
+	Unit          types.String  `tfsdk:"unit"`
 }
 
 var costDataRowAttrTypes = map[string]attr.Type{
 	"date":           types.StringType,
 	"dimensions":     types.MapType{ElemType: types.StringType},
-	"cost":           types.Float64Type,
-	"list_cost":      types.Float64Type,
-	"amortized_cost": types.Float64Type,
+	"cost":           types.StringType,
+	"list_cost":      types.StringType,
+	"amortized_cost": types.StringType,
 	"currency":       types.StringType,
+	"quantity":       types.Float64Type,
+	"unit":           types.StringType,
 }
 
 func NewCostDataDataSource() datasource.DataSource {
@@ -75,19 +86,37 @@ func (d *CostDataDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 			},
 			"granularity": schema.StringAttribute{
 				Optional:    true,
-				Description: "Period each row covers: Day, Week, Month or Quarter. Defaults to Day.",
+				Description: "Period each row covers: day, week, month, quarter, or cumulative for daily points that each carry the window's running total. Defaults to day.",
 			},
-			"group_by": schema.StringAttribute{
+			"group_by": schema.ListAttribute{
 				Optional:    true,
-				Description: "Cost dimension to group by, such as Service or Region.",
+				ElementType: types.StringType,
+				Description: "Up to three slots to group by, outermost first, each a dimension or " +
+					"`Dimension:key`: " + strings.Join(costfluent.CostGroupDimensions(), ", ") + ". Tag needs the tag key (`Tag:team`), " +
+					"VirtualTag the virtual tag token; Segment and VirtualTag need a workspace. " +
+					"Each row's `dimensions` is keyed by the slot as written here.",
+				Validators: []validator.List{
+					listvalidator.SizeAtMost(3),
+				},
 			},
 			"filter": schema.StringAttribute{
 				Optional:    true,
 				Description: "Cost filter expression.",
 			},
+			"measure": schema.StringAttribute{
+				Optional: true,
+				Description: "What each row's `quantity` holds beside its cost: `usage`, the consumed quantity, one row per " +
+					"`unit`, or `count`, the distinct resources. Omitted, or `cost`, leaves `quantity` and `unit` null.",
+				Validators: []validator.String{
+					stringvalidator.OneOf(costfluent.MeasureCost, costfluent.MeasureUsage, costfluent.MeasureCount),
+				},
+			},
 			"limit": schema.Int64Attribute{
 				Optional:    true,
-				Description: "Maximum number of rows to return (1-1000). Defaults to 100.",
+				Description: "Maximum number of rows to return, from 1 to 5000. Defaults to 5000.",
+				Validators: []validator.Int64{
+					int64validator.Between(1, costfluent.CostDataPageSize),
+				},
 			},
 			"data": schema.ListNestedAttribute{
 				Computed:    true,
@@ -101,17 +130,17 @@ func (d *CostDataDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 						"dimensions": schema.MapAttribute{
 							Computed:    true,
 							ElementType: types.StringType,
-							Description: "Group values for this row.",
+							Description: "Group values for this row, keyed by slot, such as `ServiceName` or `Tag:team`.",
 						},
-						"cost": schema.Float64Attribute{
+						"cost": schema.StringAttribute{
 							Computed:    true,
 							Description: "Cost.",
 						},
-						"list_cost": schema.Float64Attribute{
+						"list_cost": schema.StringAttribute{
 							Computed:    true,
 							Description: "Cost at list prices.",
 						},
-						"amortized_cost": schema.Float64Attribute{
+						"amortized_cost": schema.StringAttribute{
 							Computed:    true,
 							Description: "Amortized cost.",
 						},
@@ -119,12 +148,20 @@ func (d *CostDataDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 							Computed:    true,
 							Description: "Currency of the row.",
 						},
+						"quantity": schema.Float64Attribute{
+							Computed:    true,
+							Description: "With `measure = \"usage\"` the consumed quantity in `unit`, with `count` the distinct resources; null for cost.",
+						},
+						"unit": schema.StringAttribute{
+							Computed:    true,
+							Description: "With `measure = \"usage\"` the provider's consumed unit, such as `Hours`; null otherwise.",
+						},
 					},
 				},
 			},
-			"total_cost": schema.Float64Attribute{
+			"total_cost": schema.StringAttribute{
 				Computed:    true,
-				Description: "Total cost across every row that matches.",
+				Description: "Total cost of the rows in `currency`; rows of spend no exchange rate converts keep their billing currency and are not in it.",
 			},
 			"total_records": schema.Int64Attribute{
 				Computed:    true,
@@ -157,6 +194,22 @@ func (d *CostDataDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
+	var slots []string
+	if !config.GroupBy.IsNull() {
+		resp.Diagnostics.Append(config.GroupBy.ElementsAs(ctx, &slots, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+	groupBy := make([]costfluent.Grouping, len(slots))
+	for i, slot := range slots {
+		dimension, key, keyed := strings.Cut(slot, ":")
+		groupBy[i] = costfluent.Grouping{Dimension: dimension}
+		if keyed {
+			groupBy[i].Key = &key
+		}
+	}
+
 	result, err := d.client.QueryCostData(ctx, &costfluent.CostDataQuery{
 		CostFilterOptions: costfluent.CostFilterOptions{
 			StartDate:   config.StartDate.ValueString(),
@@ -165,11 +218,12 @@ func (d *CostDataDataSource) Read(ctx context.Context, req datasource.ReadReques
 			Filter:      config.Filter.ValueString(),
 		},
 		Granularity: config.Granularity.ValueString(),
-		GroupBy:     config.GroupBy.ValueString(),
-		PageSize:    int(config.Limit.ValueInt64()),
+		GroupBy:     groupBy,
+		Measure:     config.Measure.ValueString(),
+		PageOptions: costfluent.PageOptions{Limit: int(config.Limit.ValueInt64())},
 	})
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to query cost data", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to query cost data", err)
 		return
 	}
 
@@ -180,16 +234,18 @@ func (d *CostDataDataSource) Read(ctx context.Context, req datasource.ReadReques
 		rows[i] = CostDataRowModel{
 			Date:          types.StringValue(row.Date),
 			Dimensions:    dims,
-			Cost:          types.Float64Value(row.Cost),
-			ListCost:      types.Float64Value(row.ListCost),
-			AmortizedCost: types.Float64Value(row.AmortizedCost),
+			Cost:          decimalValue(row.Cost),
+			ListCost:      decimalValue(row.ListCost),
+			AmortizedCost: decimalValue(row.AmortizedCost),
 			Currency:      types.StringValue(row.Currency),
+			Quantity:      types.Float64PointerValue(row.Quantity),
+			Unit:          types.StringPointerValue(row.Unit),
 		}
 	}
 	data, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: costDataRowAttrTypes}, rows)
 	resp.Diagnostics.Append(diags...)
 	config.Data = data
-	config.TotalCost = types.Float64Value(result.Meta.TotalCost)
+	config.TotalCost = decimalValue(result.Meta.TotalCost)
 	config.TotalRecords = types.Int64Value(int64(result.Meta.TotalRecords))
 	config.Currency = types.StringValue(result.Meta.Currency)
 

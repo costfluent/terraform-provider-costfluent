@@ -3,6 +3,7 @@ package datasources
 import (
 	"context"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -21,12 +22,13 @@ type CostSummaryDataSourceModel struct {
 	StartDate          types.String  `tfsdk:"start_date"`
 	EndDate            types.String  `tfsdk:"end_date"`
 	Filter             types.String  `tfsdk:"filter"`
-	TotalCost          types.Float64 `tfsdk:"total_cost"`
-	TotalListCost      types.Float64 `tfsdk:"total_list_cost"`
-	TotalAmortizedCost types.Float64 `tfsdk:"total_amortized_cost"`
+	TotalCost          types.String  `tfsdk:"total_cost"`
+	TotalListCost      types.String  `tfsdk:"total_list_cost"`
+	TotalAmortizedCost types.String  `tfsdk:"total_amortized_cost"`
 	Currency           types.String  `tfsdk:"currency"`
-	CostChange         types.Float64 `tfsdk:"cost_change"`
+	CostChange         types.String  `tfsdk:"cost_change"`
 	CostChangePercent  types.Float64 `tfsdk:"cost_change_percent"`
+	ComparedThrough    types.String  `tfsdk:"compared_through"`
 }
 
 func NewCostSummaryDataSource() datasource.DataSource {
@@ -57,29 +59,36 @@ func (d *CostSummaryDataSource) Schema(_ context.Context, _ datasource.SchemaReq
 				Optional:    true,
 				Description: "Cost filter expression.",
 			},
-			"total_cost": schema.Float64Attribute{
+			"total_cost": schema.StringAttribute{
 				Computed:    true,
 				Description: "Total cost for the window.",
 			},
-			"total_list_cost": schema.Float64Attribute{
+			"total_list_cost": schema.StringAttribute{
 				Computed:    true,
 				Description: "Total cost at list prices.",
 			},
-			"total_amortized_cost": schema.Float64Attribute{
+			"total_amortized_cost": schema.StringAttribute{
 				Computed:    true,
 				Description: "Total amortized cost.",
 			},
 			"currency": schema.StringAttribute{
 				Computed:    true,
-				Description: "Currency code.",
+				Description: "Currency code. Null when the window mixes currencies.",
 			},
-			"cost_change": schema.Float64Attribute{
-				Computed:    true,
-				Description: "Absolute change against the previous window of the same length.",
+			"cost_change": schema.StringAttribute{
+				Computed: true,
+				Description: "Absolute change against the previous window of the same length. When the window runs past " +
+					"compared_through, its days through that day against as many days from the start of the previous window.",
 			},
 			"cost_change_percent": schema.Float64Attribute{
-				Computed:    true,
-				Description: "Percentage change against the previous window of the same length.",
+				Computed: true,
+				Description: "Percentage change, compared as cost_change is. Null when the previous window was not compared, " +
+					"or the window has no settled day yet.",
+			},
+			"compared_through": schema.StringAttribute{
+				Computed: true,
+				Description: "The settled day (YYYY-MM-DD) the change is compared through, because the last days of a window " +
+					"ending today are still arriving. Null when the two windows are compared whole.",
 			},
 		},
 	}
@@ -111,16 +120,17 @@ func (d *CostSummaryDataSource) Read(ctx context.Context, req datasource.ReadReq
 		Filter:      config.Filter.ValueString(),
 	})
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to get cost summary", err.Error())
+		apidiag.AddError(&resp.Diagnostics, "Failed to get cost summary", err)
 		return
 	}
 
-	config.TotalCost = types.Float64Value(summary.TotalCost)
-	config.TotalListCost = types.Float64Value(summary.TotalListCost)
-	config.TotalAmortizedCost = types.Float64Value(summary.TotalAmortizedCost)
-	config.Currency = types.StringValue(summary.Currency)
-	config.CostChange = types.Float64Value(summary.CostChange)
-	config.CostChangePercent = types.Float64Value(summary.CostChangePercent)
+	config.TotalCost = decimalValue(summary.TotalCost)
+	config.TotalListCost = decimalValue(summary.TotalListCost)
+	config.TotalAmortizedCost = decimalValue(summary.TotalAmortizedCost)
+	config.Currency = types.StringPointerValue(summary.Currency)
+	config.CostChange = decimalValue(summary.CostChange)
+	config.CostChangePercent = types.Float64PointerValue(summary.CostChangePercent)
+	config.ComparedThrough = types.StringPointerValue(summary.ComparedThrough)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }

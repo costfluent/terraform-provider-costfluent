@@ -13,11 +13,11 @@ Query cost over time with optional grouping and filtering. This query may be slo
 ## Example Usage
 
 ```terraform
-# Daily cost for September, grouped by service.
+# Daily cost for September, grouped by service and then by the team tag.
 data "costfluent_cost_data" "by_service" {
   start_date = "2026-09-01"
   end_date   = "2026-09-30"
-  group_by   = "Service"
+  group_by   = ["ServiceName", "Tag:team"]
   limit      = 100
 }
 
@@ -28,7 +28,8 @@ output "total_cost" {
 output "daily_service_cost" {
   value = [for row in data.costfluent_cost_data.by_service.data : {
     date    = row.date
-    service = row.dimensions["Service"]
+    service = row.dimensions["ServiceName"]
+    team    = row.dimensions["Tag:team"]
     cost    = row.cost
   }]
 }
@@ -37,7 +38,7 @@ output "daily_service_cost" {
 data "costfluent_cost_data" "eu_west_q1" {
   start_date  = "2026-01-01"
   end_date    = "2026-03-31"
-  granularity = "Month"
+  granularity = "month"
   filter      = "region = 'eu-west-1'"
 }
 
@@ -57,16 +58,17 @@ output "eu_west_total" {
 ### Optional
 
 - `filter` (String) Cost filter expression.
-- `granularity` (String) Period each row covers: Day, Week, Month or Quarter. Defaults to Day.
-- `group_by` (String) Cost dimension to group by, such as Service or Region.
-- `limit` (Number) Maximum number of rows to return (1-1000). Defaults to 100.
+- `granularity` (String) Period each row covers: day, week, month, quarter, or cumulative for daily points that each carry the window's running total. Defaults to day.
+- `group_by` (List of String) Up to three slots to group by, outermost first, each a dimension or `Dimension:key`: Provider, ProviderName, SubAccount, ServiceName, Region, ResourceName, ChargeCategory, Tag, VirtualTag, Segment, Cluster, Namespace, BillingAccount, ServiceCategory, ServiceSubcategory, UsageUnit, ChargeClass, Tagged, ResourceId, CommitmentStatus, CommitmentType, PricingCategory, Sku. Tag needs the tag key (`Tag:team`), VirtualTag the virtual tag token; Segment and VirtualTag need a workspace. Each row's `dimensions` is keyed by the slot as written here.
+- `limit` (Number) Maximum number of rows to return, from 1 to 5000. Defaults to 5000.
+- `measure` (String) What each row's `quantity` holds beside its cost: `usage`, the consumed quantity, one row per `unit`, or `count`, the distinct resources. Omitted, or `cost`, leaves `quantity` and `unit` null.
 - `workspace_id` (String) Workspace ID. Uses the provider's workspace if not specified, and the whole organization when neither is set.
 
 ### Read-Only
 
 - `currency` (String) Currency of the total.
 - `data` (Attributes List) Cost rows. (see [below for nested schema](#nestedatt--data))
-- `total_cost` (Number) Total cost across every row that matches.
+- `total_cost` (String) Total cost of the rows in `currency`; rows of spend no exchange rate converts keep their billing currency and are not in it.
 - `total_records` (Number) Number of rows that match, beyond the limit too.
 
 <a id="nestedatt--data"></a>
@@ -74,9 +76,11 @@ output "eu_west_total" {
 
 Read-Only:
 
-- `amortized_cost` (Number) Amortized cost.
-- `cost` (Number) Cost.
+- `amortized_cost` (String) Amortized cost.
+- `cost` (String) Cost.
 - `currency` (String) Currency of the row.
 - `date` (String) First day of the period the row covers.
-- `dimensions` (Map of String) Group values for this row.
-- `list_cost` (Number) Cost at list prices.
+- `dimensions` (Map of String) Group values for this row, keyed by slot, such as `ServiceName` or `Tag:team`.
+- `list_cost` (String) Cost at list prices.
+- `quantity` (Number) With `measure = "usage"` the consumed quantity in `unit`, with `count` the distinct resources; null for cost.
+- `unit` (String) With `measure = "usage"` the provider's consumed unit, such as `Hours`; null otherwise.

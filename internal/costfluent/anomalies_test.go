@@ -6,12 +6,16 @@ import (
 )
 
 func TestListAnomalies(t *testing.T) {
-	c, got := testClient(t, stub{200, `{"data":[{"id":"anm_1","providerId":"prv_1","anomalyDate":"2026-09-20",
-		"serviceName":"EC2","anomalyType":"spike","severity":"high","expectedCost":10,"actualCost":40,
-		"deviationPercent":300,"currency":"EUR","isAcknowledged":false,"detectedAt":"2026-09-21T02:00:00Z"}],
-		"totalCount":7,"unacknowledgedCount":3}`})
+	c, got := testClient(t, stub{200, `{"links":{"self":"https://api.test/v1/anomalies?page=2&limit=20",
+		"next":"https://api.test/v1/anomalies?page=3&limit=20"},"data":[{"id":"anm_1","workspaceId":"ws_1","providerId":"prv_1",
+		"anomalyDate":"2026-09-20","serviceName":"EC2","anomalyType":"spike","severity":"high","expectedCost":"10.00000000",
+		"actualCost":"40.00000000","deviationPercent":300,"currency":"EUR","status":"ignored",
+		"ignoreReason":"Planned load test","isAcknowledged":false,
+		"detectedAt":"2026-09-21T02:00:00Z"}]}`})
 
-	list, err := c.ListAnomalies(context.Background(), &ListAnomaliesOptions{Severity: "high", UnacknowledgedOnly: true, Limit: 20})
+	list, err := c.ListAnomalies(context.Background(), &ListAnomaliesOptions{
+		Severity: "high", UnacknowledgedOnly: true, PageOptions: PageOptions{Page: 2, Limit: 20},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,9 +23,11 @@ func TestListAnomalies(t *testing.T) {
 	wantRequest(t, g, "GET", "/v1/anomalies")
 	wantQuery(t, g, "severity", "high")
 	wantQuery(t, g, "unacknowledgedOnly", "true")
+	wantQuery(t, g, "page", "2")
 	wantQuery(t, g, "limit", "20")
-	if list.TotalCount != 7 || list.UnacknowledgedCount != 3 || list.Data[0].DeviationPercent != 300 ||
-		list.Data[0].ProviderID != "prv_1" {
+	a := list.Data[0]
+	if !list.Links.HasNextPage() || a.DeviationPercent != 300 || a.ProviderID != "prv_1" || a.WorkspaceID != "ws_1" ||
+		a.Status != "ignored" || a.IgnoreReason == nil || *a.IgnoreReason != "Planned load test" || a.StatusReason != nil {
 		t.Fatalf("decoded %+v", list)
 	}
 }
