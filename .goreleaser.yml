@@ -5,10 +5,10 @@ version: 2
 # anywhere else would produce names the registry silently refuses.
 project_name: terraform-provider-costfluent
 
-# The release body is the tag's message, which the release workflow passes as --release-notes. A
-# changelog would list commit subjects, and every one of them is "Bump to <version>".
-changelog:
-  disable: true
+# The release body is the tag's message, which the release workflow passes as --release-notes.
+# Given a notes file, GoReleaser builds no changelog from commit subjects, all "Bump to <version>".
+# The changelog stays enabled because that step is what loads the file: disabled, it published every
+# release with an empty body.
 
 builds:
   # The main package is under cmd/, not at the repository root, and GoReleaser defaults to the root
