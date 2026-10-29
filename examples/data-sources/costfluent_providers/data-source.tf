@@ -6,7 +6,7 @@ output "provider_count" {
 }
 
 output "provider_names" {
-  value = [for p in data.costfluent_providers.all.providers : p.name]
+  value = [for p in data.costfluent_providers.all.providers : p.display_name]
 }
 
 # Filter to find AWS providers

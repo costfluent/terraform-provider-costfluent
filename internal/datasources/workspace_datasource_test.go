@@ -20,6 +20,7 @@ func workspaceJSON(id, name string) map[string]any {
 		"timeZone":                 "Europe/Berlin",
 		"enableCurrencyConversion": false,
 		"enableAutomaticSyncing":   true,
+		"blendCommitmentDiscounts": false,
 		"providerCount":            2,
 		"createdAt":                "2026-09-01T08:30:00Z",
 	}
@@ -62,6 +63,7 @@ data "costfluent_workspace" "w" {
 				resource.TestCheckResourceAttr("data.costfluent_workspace.w", "currency", "EUR"),
 				resource.TestCheckResourceAttr("data.costfluent_workspace.w", "time_zone", "Europe/Berlin"),
 				resource.TestCheckResourceAttr("data.costfluent_workspace.w", "enable_automatic_syncing", "true"),
+				resource.TestCheckResourceAttr("data.costfluent_workspace.w", "blend_commitment_discounts", "false"),
 				resource.TestCheckResourceAttr("data.costfluent_workspace.w", "created_at", "2026-09-01T08:30:00Z"),
 				resource.TestCheckNoResourceAttr("data.costfluent_workspace.w", "updated_at"),
 				func(*terraform.State) error {
@@ -70,6 +72,42 @@ data "costfluent_workspace" "w" {
 					}
 					return nil
 				},
+			),
+		}},
+	})
+}
+
+// The data source reads the blend as the workspace holds it, by ID and by name alike.
+func TestWorkspaceBlendCommitmentDiscountsIsReadByTheDataSource(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	blended := workspaceJSON(testWorkspace, "Finance")
+	blended["blendCommitmentDiscounts"] = true
+	api.Handle("GET /v1/workspaces/{id}", func(r fakeapi.Request) fakeapi.Response {
+		if r.PathValue("id") != testWorkspace {
+			return fakeapi.NotFound()
+		}
+		return fakeapi.JSON(blended)
+	})
+	api.Handle("GET /v1/workspaces", func(fakeapi.Request) fakeapi.Response {
+		return page("/v1/workspaces", "", blended)
+	})
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: api.ProviderBlock() + fmt.Sprintf(`
+data "costfluent_workspace" "by_id" {
+  id = %q
+}
+
+data "costfluent_workspace" "by_name" {
+  name = "Finance"
+}
+`, testWorkspace),
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("data.costfluent_workspace.by_id", "blend_commitment_discounts", "true"),
+				resource.TestCheckResourceAttr("data.costfluent_workspace.by_name", "blend_commitment_discounts", "true"),
 			),
 		}},
 	})

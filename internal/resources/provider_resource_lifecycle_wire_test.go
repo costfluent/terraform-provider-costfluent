@@ -22,7 +22,7 @@ func fakeProviders(api *fakeapi.Server) {
 			return map[string]any{
 				"type":                 "cloud",
 				"key":                  body["key"],
-				"name":                 body["name"],
+				"displayName":          body["displayName"],
 				"description":          body["description"],
 				"status":               "active",
 				"externalId":           "123456789012",
@@ -35,12 +35,12 @@ func fakeProviders(api *fakeapi.Server) {
 			}
 		},
 		Created: func(obj map[string]any) fakeapi.Response {
-			return fakeapi.JSON(map[string]any{"id": obj["id"], "type": obj["type"], "key": obj["key"], "name": obj["name"]})
+			return fakeapi.JSON(map[string]any{"id": obj["id"], "type": obj["type"], "key": obj["key"], "displayName": obj["displayName"]})
 		},
 		Apply: func(obj, body map[string]any) {
 			// An empty description is stored and returned as the empty string; clearDescription
 			// removes it.
-			for _, k := range []string{"name", "description", "externalId", "syncFrequencyMinutes"} {
+			for _, k := range []string{"displayName", "description", "externalId", "syncFrequencyMinutes"} {
 				if v, ok := body[k]; ok {
 					obj[k] = v
 				}
@@ -66,7 +66,7 @@ func providerLifecycleConfig(api *fakeapi.Server, roleArn, attrs string) string 
 	return api.ProviderBlock() + fmt.Sprintf(`
 resource "costfluent_provider" "aws" {
   key         = "aws"
-  name        = "AWS prod"
+  display_name = "AWS prod"
   credentials = { role_arn = %q }
 %s}
 `, roleArn, attrs)
@@ -106,7 +106,7 @@ func TestProviderLifecycleSendsTheContractShape(t *testing.T) {
 						creds, _ := create.Body["credentials"].(map[string]any)
 						settings, _ := create.Body["settings"].(map[string]any)
 						switch {
-						case create.Body["key"] != "aws", create.Body["name"] != "AWS prod",
+						case create.Body["key"] != "aws", create.Body["displayName"] != "AWS prod",
 							create.Body["description"] != "Billing account",
 							create.Body["syncFrequencyMinutes"] != float64(1440):
 							return fmt.Errorf("create body = %s", create.Raw)
@@ -147,7 +147,7 @@ func TestProviderLifecycleSendsTheContractShape(t *testing.T) {
 						case len(creds) != 1 || creds["role_arn"] != providerRotatedRoleArn:
 							return fmt.Errorf("update credentials = %v", creds)
 						}
-						for _, unchanged := range []string{"settings", "clearSettings", "description", "name", "externalId"} {
+						for _, unchanged := range []string{"settings", "clearSettings", "description", "displayName", "externalId"} {
 							if _, sent := update.Body[unchanged]; sent {
 								return fmt.Errorf("update sent unchanged %s: %s", unchanged, update.Raw)
 							}
@@ -285,7 +285,7 @@ func TestProviderRenameIsAnUpdateInPlace(t *testing.T) {
 	renamed := api.ProviderBlock() + fmt.Sprintf(`
 resource "costfluent_provider" "aws" {
   key         = "aws"
-  name        = "AWS prod (EU)"
+  display_name = "AWS prod (EU)"
   credentials = { role_arn = %q }
 }
 `, providerRoleArn)
@@ -305,14 +305,14 @@ resource "costfluent_provider" "aws" {
 					},
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("costfluent_provider.aws", "name", "AWS prod (EU)"),
+					resource.TestCheckResourceAttr("costfluent_provider.aws", "display_name", "AWS prod (EU)"),
 					func(*terraform.State) error {
 						if got := providerOnlyID(t, api); got != id {
 							return fmt.Errorf("provider id = %s, want the same %s", got, id)
 						}
 						update := api.LastRequest(http.MethodPut, "/v1/providers/"+id)
-						if update.Body["name"] != "AWS prod (EU)" {
-							return fmt.Errorf("update body = %s, want the new name", update.Raw)
+						if update.Body["displayName"] != "AWS prod (EU)" {
+							return fmt.Errorf("update body = %s, want the new display name", update.Raw)
 						}
 						if _, sent := update.Body["credentials"]; sent {
 							return fmt.Errorf("rename sent unchanged credentials: %s", update.Raw)

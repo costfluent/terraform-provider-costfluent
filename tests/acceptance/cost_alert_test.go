@@ -16,7 +16,7 @@ import (
 func TestAccCostAlert_basic(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -92,7 +92,7 @@ resource "costfluent_cost_alert" "test" {
 	}
 	withBoth := "  comparison_period = \"previousWeek\"\n  filter            = \"costs.provider = 'aws'\"\n"
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -124,7 +124,7 @@ resource "costfluent_cost_alert" "test" {
 func TestAccCostAlert_refusalNamesTheField(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{{
@@ -166,7 +166,7 @@ resource "costfluent_cost_alert" "test" {
 	}}
 	const cql = `"costs.provider = 'aws'"`
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{

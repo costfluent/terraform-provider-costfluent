@@ -56,12 +56,12 @@ resource "costfluent_allocation_rule" "r" {
 			return widgetConfig(api, reportWidget(testReport, v, ""))
 		}},
 		{"Folder", "/v1/folders", http.MethodPut, "title", fakeFolders, folderConfig},
-		{"Provider", "/v1/providers", http.MethodPut, "name", fakeProviders, func(api *fakeapi.Server, v string) string {
+		{"Provider", "/v1/providers", http.MethodPut, "displayName", fakeProviders, func(api *fakeapi.Server, v string) string {
 			return api.ProviderBlock() + fmt.Sprintf(`
 resource "costfluent_provider" "aws" {
-  key         = "aws"
-  name        = %q
-  credentials = { role_arn = %q }
+  key          = "aws"
+  display_name = %q
+  credentials  = { role_arn = %q }
 }
 `, v, providerRoleArn)
 		}},
@@ -78,6 +78,9 @@ resource "costfluent_cost_report_subscription" "s" {
 		}},
 		{"Saved filter", "/v1/saved-filters", http.MethodPut, "title", savedFilterFake, func(api *fakeapi.Server, v string) string {
 			return savedFilterConfig(api, v, "")
+		}},
+		{"Savings view", savingsViewPath, http.MethodPut, "title", savingsViewFake, func(api *fakeapi.Server, v string) string {
+			return savingsViewConfig(api, v, "")
 		}},
 		{"Segment", "/v1/segments", http.MethodPut, "product", segmentFake, func(api *fakeapi.Server, v string) string {
 			return segmentConfig(api, "Payments", v, "")

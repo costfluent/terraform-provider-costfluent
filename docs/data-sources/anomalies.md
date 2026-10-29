@@ -51,7 +51,10 @@ Read-Only:
 
 - `actual_cost` (String) Actual cost.
 - `anomaly_date` (String) Day the cost departed from what was expected.
-- `anomaly_type` (String) Anomaly type.
+- `anomaly_type` (String) Anomaly type: spike, a day well above its 30-day baseline, or new_spend, a service or a region of one first billed within the seven days up to the anomaly date after none in the 95 days before it. Read any other value as an anomaly.
+- `attributed_resource_id` (String) The resource with more than half the increase; null when no one resource holds most of it.
+- `attributed_sku` (String) The SKU with more than half the increase, named as a cost report's SKU grouping names it; null when no one SKU holds most of it.
+- `contributors` (Attributes List) The resources that added most to the increase, largest first, at most three. (see [below for nested schema](#nestedatt--anomalies--contributors))
 - `currency` (String) Currency of the costs.
 - `detected_at` (String) Detection timestamp.
 - `deviation_percent` (Number) Deviation from the expected cost, in percent.
@@ -59,8 +62,27 @@ Read-Only:
 - `id` (String) Anomaly ID.
 - `is_acknowledged` (Boolean) Whether the anomaly was acknowledged.
 - `provider_id` (String) Provider the anomaly was found in.
-- `region` (String) Region, when the anomaly is regional.
+- `region` (String) The region with more than half the increase; null when no one region holds most of it. For new_spend, the new region with more than half the new spend.
 - `service_name` (String) Service whose cost departed.
 - `severity` (String) Severity level.
+- `sku_contributors` (Attributes List) The SKUs that added most to the increase, largest first, at most three. (see [below for nested schema](#nestedatt--anomalies--sku_contributors))
 - `status` (String) open, acknowledged, archived or ignored.
 - `workspace_id` (String) Workspace whose cost the anomaly is in.
+
+<a id="nestedatt--anomalies--contributors"></a>
+### Nested Schema for `anomalies.contributors`
+
+Read-Only:
+
+- `account_id` (String) Account the resource is billed to; null when the provider names none.
+- `increase` (String) The resource's part of the increase, in the anomaly's currency.
+- `resource_id` (String) Resource ID.
+
+
+<a id="nestedatt--anomalies--sku_contributors"></a>
+### Nested Schema for `anomalies.sku_contributors`
+
+Read-Only:
+
+- `increase` (String) The SKU's part of the increase, in the anomaly's currency.
+- `sku` (String) The provider's SKU label, such as an AWS usage type, or its SKU ID when it has none.

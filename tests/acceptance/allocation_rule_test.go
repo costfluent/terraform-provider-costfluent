@@ -19,7 +19,7 @@ func TestAccAllocationRule_lifecycle(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 	var created trackedObject
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_allocation_rule", allocationRuleExists),

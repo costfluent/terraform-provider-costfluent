@@ -21,12 +21,15 @@ resource "costfluent_budget" "monthly" {
   currency   = "EUR"
   start_date = "2026-01-01"
 
-  # Alert thresholds, as percentages of the current period's amount, listed lowest first. When
-  # several are crossed at once, only the highest notifies.
+  # Alert thresholds, as percentages of the current period's amount: the actual ones, held against
+  # the spend so far, lowest first, then the forecast ones, which notify once a period when the
+  # forecast for the period's end reaches them. When several are crossed at once, only the highest
+  # notifies. Changing them updates the budget in place.
   alerts = [
     { threshold_percent = 50 },
     { threshold_percent = 80 },
     { threshold_percent = 100 },
+    { threshold_percent = 100, basis = "forecast" },
   ]
 
   # Notification channels every threshold delivers to, by ID.
@@ -102,7 +105,7 @@ resource "costfluent_budget" "ai_tokens" {
 
 ### Optional
 
-- `alerts` (Attributes List) Alert thresholds, at least one, listed lowest threshold first with no repeats. Defaults to 50, 80 and 100 percent. Changing them recreates the budget. (see [below for nested schema](#nestedatt--alerts))
+- `alerts` (Attributes List) Alert thresholds, at least one: the actual ones lowest first, then the forecast ones lowest first, each percent once per basis. Defaults to actual thresholds at 50, 80 and 100 percent. Changing them updates the budget in place: a threshold kept at the same percent and basis keeps whether it fired this period, a new one starts armed, and one left out is removed. (see [below for nested schema](#nestedatt--alerts))
 - `amount` (String) The same amount for every period, as a decimal string with at most two decimals ("1250.50"), so it is never rounded through a float: money in currency, or for a usage budget a quantity in usage_unit. The same number at another scale is not a change. Exactly one of amount and periods.
 - `app_ids` (List of String) Notification channels every alert threshold delivers to. Removing them stops the budget's notifications without recreating it. A budget without alert thresholds keeps none.
 - `cost_report_id` (String) Saved cost report whose total the budget tracks: its filter, virtual tags and money settings. Conflicts with segment_id; a usage budget requires it. A report carries at most one cost budget and one usage budget. Changing or removing it moves the same budget in place.
@@ -133,7 +136,11 @@ resource "costfluent_budget" "ai_tokens" {
 
 Required:
 
-- `threshold_percent` (Number) Alert threshold as a percentage of the current period's amount (1-200). When several are crossed at once, only the highest notifies.
+- `threshold_percent` (Number) Alert threshold as a percentage of the current period's amount (1-200). When several are crossed at once, only the highest notifies, the actual one at an equal percent.
+
+Optional:
+
+- `basis` (String) What the threshold is held against: actual, the spend so far in the period, or forecast, the forecast for the period's end, which notifies once a period when it reaches the threshold. Defaults to actual. A usage budget takes no forecast threshold.
 
 
 <a id="nestedatt--periods"></a>

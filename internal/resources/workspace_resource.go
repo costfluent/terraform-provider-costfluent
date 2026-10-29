@@ -40,6 +40,7 @@ type WorkspaceResourceModel struct {
 	ConversionCurrency             types.String `tfsdk:"conversion_currency"`
 	ConversionMethod               types.String `tfsdk:"conversion_method"`
 	EnableAutomaticSyncing         types.Bool   `tfsdk:"enable_automatic_syncing"`
+	BlendCommitmentDiscounts       types.Bool   `tfsdk:"blend_commitment_discounts"`
 	TimeZone                       types.String `tfsdk:"time_zone"`
 	ReportDefaults                 types.Object `tfsdk:"report_defaults"`
 	AnomaliesExcludeMarketplace    types.Bool   `tfsdk:"anomalies_exclude_marketplace"`
@@ -123,6 +124,15 @@ func (r *WorkspaceResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Description: "Collect from this workspace's data sources on Costfluent's own schedule. When " +
 					"false, the recurring collection is skipped for every source no other workspace still " +
 					"syncs; stored cost data and an explicitly requested sync are unaffected.",
+			},
+			"blend_commitment_discounts": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				Description: "Spread each day's AWS Savings Plan and Reserved Instance discount evenly across the " +
+					"usage it could cover, in every amortized figure of this workspace, rather than leave it on " +
+					"the usage AWS applied it to. Billed figures, connection totals and commitment coverage do " +
+					"not change. Only an Owner can change it.",
 			},
 			"time_zone": schema.StringAttribute{
 				Optional: true,
@@ -292,6 +302,10 @@ func (r *WorkspaceResource) Update(ctx context.Context, req resource.UpdateReque
 		syncing := plan.EnableAutomaticSyncing.ValueBool()
 		input.EnableAutomaticSyncing = &syncing
 	}
+	if !plan.BlendCommitmentDiscounts.Equal(state.BlendCommitmentDiscounts) {
+		blend := plan.BlendCommitmentDiscounts.ValueBool()
+		input.BlendCommitmentDiscounts = &blend
+	}
 	if !plan.TimeZone.Equal(state.TimeZone) {
 		input.TimeZone = knownString(plan.TimeZone)
 	}
@@ -350,7 +364,7 @@ func (r *WorkspaceResource) ImportState(ctx context.Context, req resource.Import
 // is applied by an update right after the create.
 var workspaceSettings = []string{
 	"enable_currency_conversion", "conversion_currency", "conversion_method", "enable_automatic_syncing",
-	"report_defaults", "anomalies_exclude_marketplace", "anomalies_exclude_commitment_fees", "anomaly_notification_threshold",
+	"blend_commitment_discounts", "report_defaults", "anomalies_exclude_marketplace", "anomalies_exclude_commitment_fees", "anomaly_notification_threshold",
 }
 
 // workspaceSettingsSent is whether a plan sends updateWorkspace: every update does, and a create
@@ -396,6 +410,11 @@ func settingsInput(plan *WorkspaceResourceModel, ws *costfluent.Workspace) *cost
 	if !plan.EnableAutomaticSyncing.IsUnknown() && plan.EnableAutomaticSyncing.ValueBool() != ws.EnableAutomaticSyncing {
 		syncing := plan.EnableAutomaticSyncing.ValueBool()
 		input.EnableAutomaticSyncing = &syncing
+		changed = true
+	}
+	if !plan.BlendCommitmentDiscounts.IsUnknown() && plan.BlendCommitmentDiscounts.ValueBool() != ws.BlendCommitmentDiscounts {
+		blend := plan.BlendCommitmentDiscounts.ValueBool()
+		input.BlendCommitmentDiscounts = &blend
 		changed = true
 	}
 
@@ -479,6 +498,7 @@ func mapWorkspaceToModel(ws *costfluent.Workspace, model *WorkspaceResourceModel
 	model.EnableCurrencyConversion = types.BoolValue(ws.EnableCurrencyConversion)
 	model.ConversionMethod = sameEnum(model.ConversionMethod, ws.ConversionMethod)
 	model.EnableAutomaticSyncing = types.BoolValue(ws.EnableAutomaticSyncing)
+	model.BlendCommitmentDiscounts = types.BoolValue(ws.BlendCommitmentDiscounts)
 	model.TimeZone = sameTimeZone(model.TimeZone, ws.TimeZone)
 	configuredDefaults := model.ReportDefaults.Attributes()
 	dateInterval, _ := configuredDefaults["date_interval"].(types.String)

@@ -13,22 +13,31 @@ import (
 func anomalyJSON() []map[string]any {
 	return []map[string]any{
 		{
-			"id":               "ano_0000000000000000000001",
-			"workspaceId":      "ws_0000000000000000000001",
-			"providerId":       awsProvider,
-			"anomalyDate":      "2026-10-07",
-			"serviceName":      "Amazon EC2",
-			"region":           "eu-central-1",
-			"anomalyType":      "spike",
-			"severity":         "high",
-			"expectedCost":     "120.50000000",
-			"actualCost":       "410.25000000",
-			"deviationPercent": 240.46,
-			"description":      "EC2 spend tripled",
-			"currency":         "EUR",
-			"status":           "open",
-			"isAcknowledged":   false,
-			"detectedAt":       "2026-10-08T06:00:00Z",
+			"id":                   "ano_0000000000000000000001",
+			"workspaceId":          "ws_0000000000000000000001",
+			"providerId":           awsProvider,
+			"anomalyDate":          "2026-10-07",
+			"serviceName":          "Amazon EC2",
+			"region":               "eu-central-1",
+			"anomalyType":          "spike",
+			"severity":             "high",
+			"expectedCost":         "120.50000000",
+			"actualCost":           "410.25000000",
+			"deviationPercent":     240.46,
+			"description":          "EC2 spend tripled",
+			"currency":             "EUR",
+			"status":               "open",
+			"isAcknowledged":       false,
+			"detectedAt":           "2026-10-08T06:00:00Z",
+			"attributedResourceId": "i-0abc",
+			"contributors": []map[string]any{
+				{"accountId": "111111111111", "resourceId": "i-0abc", "increase": "250.50000000"},
+				{"accountId": nil, "resourceId": "bucket-logs", "increase": "3.25000000"},
+			},
+			"attributedSku": "EUC1-BoxUsage:m7i.4xlarge",
+			"skuContributors": []map[string]any{
+				{"sku": "EUC1-BoxUsage:m7i.4xlarge", "increase": "260.00000000"},
+			},
 		},
 		{
 			"id":               "ano_0000000000000000000002",
@@ -98,6 +107,41 @@ data "costfluent_anomalies" "a" {
 				resource.TestCheckNoResourceAttr("data.costfluent_anomalies.a", "anomalies.1.region"),
 				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.1.status", "acknowledged"),
 				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.1.is_acknowledged", "true"),
+			),
+		}},
+	})
+}
+
+// The region, resource and SKU an anomaly is attributed to, and their parts, are mapped; an anomaly
+// with none, as one stored before the stack attributed SKUs, lists none.
+func TestAnomaliesDataSourceMapsTheAttribution(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	api.Handle("GET /v1/anomalies", func(fakeapi.Request) fakeapi.Response {
+		return page("/v1/anomalies", "", anomalyJSON()...)
+	})
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: api.ProviderBlock() + `data "costfluent_anomalies" "a" {}`,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.region", "eu-central-1"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.attributed_resource_id", "i-0abc"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.contributors.#", "2"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.contributors.0.account_id", "111111111111"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.contributors.0.resource_id", "i-0abc"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.contributors.0.increase", "250.50000000"),
+				resource.TestCheckNoResourceAttr("data.costfluent_anomalies.a", "anomalies.0.contributors.1.account_id"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.contributors.1.resource_id", "bucket-logs"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.attributed_sku", "EUC1-BoxUsage:m7i.4xlarge"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.sku_contributors.#", "1"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.sku_contributors.0.sku", "EUC1-BoxUsage:m7i.4xlarge"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.0.sku_contributors.0.increase", "260.00000000"),
+				resource.TestCheckNoResourceAttr("data.costfluent_anomalies.a", "anomalies.1.attributed_resource_id"),
+				resource.TestCheckNoResourceAttr("data.costfluent_anomalies.a", "anomalies.1.attributed_sku"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.1.contributors.#", "0"),
+				resource.TestCheckResourceAttr("data.costfluent_anomalies.a", "anomalies.1.sku_contributors.#", "0"),
 			),
 		}},
 	})

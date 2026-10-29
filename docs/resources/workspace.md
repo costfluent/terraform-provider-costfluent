@@ -50,6 +50,7 @@ resource "costfluent_workspace" "uk" {
 - `anomalies_exclude_commitment_fees` (Boolean) Leave commitment fees, reservation and Savings Plan purchases and fees, out of anomaly detection.
 - `anomalies_exclude_marketplace` (Boolean) Leave marketplace charges out of anomaly detection.
 - `anomaly_notification_threshold` (String) The smallest increase over its baseline, in the workspace currency and as a decimal string ("250"), an anomaly must reach to be notified. "0" notifies every anomaly.
+- `blend_commitment_discounts` (Boolean) Spread each day's AWS Savings Plan and Reserved Instance discount evenly across the usage it could cover, in every amortized figure of this workspace, rather than leave it on the usage AWS applied it to. Billed figures, connection totals and commitment coverage do not change. Only an Owner can change it.
 - `conversion_currency` (String) The currency costs are converted into while conversion is enabled (ISO 4217).
 - `conversion_method` (String) Exchange rate dates: monthlyAverage (the mean of the month's daily rates), monthEndRate (the month's last rate) or transactionDate (each charge's own day).
 - `currency` (String) Display preference (ISO 4217): the currency costs default to where no billing currency applies. Changeable only while enable_currency_conversion is false, because the conversion selection overrides it.

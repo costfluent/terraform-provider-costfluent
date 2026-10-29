@@ -1,6 +1,6 @@
-# Lookup provider by name
+# Lookup provider by display name
 data "costfluent_provider" "aws_main" {
-  name = "Production AWS"
+  display_name = "Production AWS"
 }
 
 # Alert on that one connection's cost.

@@ -6,12 +6,15 @@ resource "costfluent_budget" "monthly" {
   currency   = "EUR"
   start_date = "2026-01-01"
 
-  # Alert thresholds, as percentages of the current period's amount, listed lowest first. When
-  # several are crossed at once, only the highest notifies.
+  # Alert thresholds, as percentages of the current period's amount: the actual ones, held against
+  # the spend so far, lowest first, then the forecast ones, which notify once a period when the
+  # forecast for the period's end reaches them. When several are crossed at once, only the highest
+  # notifies. Changing them updates the budget in place.
   alerts = [
     { threshold_percent = 50 },
     { threshold_percent = 80 },
     { threshold_percent = 100 },
+    { threshold_percent = 100, basis = "forecast" },
   ]
 
   # Notification channels every threshold delivers to, by ID.

@@ -15,7 +15,7 @@ import (
 func TestAccBudget_basic(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -69,7 +69,7 @@ func TestAccBudget_basic(t *testing.T) {
 func TestAccBudget_periods(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -95,23 +95,47 @@ func TestAccBudget_periods(t *testing.T) {
 	})
 }
 
+// Thresholds change in place: the same budget takes a forecast threshold and drops a spend one,
+// reads them back in the API's order, and imports with nothing to change.
 func TestAccBudget_withAlerts(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
+	var id string
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccBudgetConfigWithAlerts(rName),
+				Config: testAccBudgetConfigWithAlerts(rName, `
+    { threshold_percent = 80 },
+    { threshold_percent = 100 },`),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttrSet("costfluent_budget.test", "id"),
 					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.#", "2"),
 					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.0.threshold_percent", "80"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.0.basis", "actual"),
 					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.1.threshold_percent", "100"),
+					testAccKeepsID("costfluent_budget.test", &id),
 				),
 			},
-			// Configured alerts are lowest first, the order the API stores, so an import changes nothing.
+			// Configured alerts are in the order the API returns, so an import changes nothing.
+			testAccImportPlansNothing("costfluent_budget.test"),
+			{
+				Config: testAccBudgetConfigWithAlerts(rName, `
+    { threshold_percent = 100 },
+    { threshold_percent = 90, basis = "forecast" },`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("costfluent_budget.test", plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.#", "2"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.0.threshold_percent", "100"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.0.basis", "actual"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.1.threshold_percent", "90"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.1.basis", "forecast"),
+					testAccKeepsID("costfluent_budget.test", &id),
+				),
+			},
 			testAccImportPlansNothing("costfluent_budget.test"),
 		},
 	})
@@ -122,7 +146,7 @@ func TestAccBudget_withAlerts(t *testing.T) {
 func TestAccBudget_importRefusesAnotherWorkspace(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -157,7 +181,7 @@ func TestAccBudget_channels(t *testing.T) {
 	}
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -186,7 +210,7 @@ func TestAccBudget_onAReport(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 	var id string
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -230,7 +254,7 @@ func TestAccBudget_usage(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 	var id string
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -293,7 +317,7 @@ resource "costfluent_budget" "test" {
 func TestAccBudget_emptyAlertsRefused(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{{
@@ -362,7 +386,7 @@ resource "costfluent_budget" "test" {
 `, name, amount)
 }
 
-func testAccBudgetConfigWithAlerts(name string) string {
+func testAccBudgetConfigWithAlerts(name, alerts string) string {
 	return testAccWorkspaceFixture(name) + fmt.Sprintf(`
 resource "costfluent_budget" "test" {
   workspace_id = costfluent_workspace.fixture.id
@@ -370,12 +394,10 @@ resource "costfluent_budget" "test" {
   amount       = 5000
   currency     = "EUR"
 
-  alerts = [
-    { threshold_percent = 80 },
-    { threshold_percent = 100 },
+  alerts = [%s
   ]
 }
-`, name)
+`, name, alerts)
 }
 
 func testAccBudgetConfigWithPeriods(name, firstQuarter string) string {

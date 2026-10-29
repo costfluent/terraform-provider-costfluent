@@ -23,7 +23,7 @@ type ProviderDataSource struct {
 type ProviderDataSourceModel struct {
 	ID                   types.String `tfsdk:"id"`
 	Key                  types.String `tfsdk:"key"`
-	Name                 types.String `tfsdk:"name"`
+	DisplayName          types.String `tfsdk:"display_name"`
 	Description          types.String `tfsdk:"description"`
 	Status               types.String `tfsdk:"status"`
 	SyncFrequencyMinutes types.Int64  `tfsdk:"sync_frequency_minutes"`
@@ -44,17 +44,17 @@ func (d *ProviderDataSource) Metadata(_ context.Context, req datasource.Metadata
 
 func (d *ProviderDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Fetch a Costfluent provider by ID or name.",
+		Description: "Fetch a Costfluent provider by ID or display name.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Provider ID. Either id or name must be specified.",
+				Description: "Provider ID. Either id or display_name must be specified.",
 			},
-			"name": schema.StringAttribute{
+			"display_name": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Provider name. Either id or name must be specified. A provider connected without a name is named after its type (`Amazon Web Services`), so several can share one; a name several providers share is refused, and id picks one of them.",
+				Description: "Provider display name. Either id or display_name must be specified. A provider connected without a display name is named after its type (`Amazon Web Services`), so several can share one; a display name several providers share is refused, and id picks one of them.",
 			},
 			"key": schema.StringAttribute{
 				Computed:    true,
@@ -120,16 +120,16 @@ func (d *ProviderDataSource) Read(ctx context.Context, req datasource.ReadReques
 
 	if !config.ID.IsNull() {
 		provider, err = d.client.GetProvider(ctx, config.ID.ValueString())
-	} else if !config.Name.IsNull() {
+	} else if !config.DisplayName.IsNull() {
 		providers, listErr := d.client.ListAllProviders(ctx, 100)
 		if listErr != nil {
 			apidiag.AddError(&resp.Diagnostics, "Failed to list providers", listErr)
 			return
 		}
-		name := config.Name.ValueString()
+		name := config.DisplayName.ValueString()
 		var matches []string
 		for _, p := range providers {
-			if p.Name != name {
+			if p.DisplayName != name {
 				continue
 			}
 			if provider == nil {
@@ -142,17 +142,17 @@ func (d *ProviderDataSource) Read(ctx context.Context, req datasource.ReadReques
 			matches = append(matches, match)
 		}
 		if provider == nil {
-			resp.Diagnostics.AddError("Provider not found", fmt.Sprintf("No provider found with name %q", name))
+			resp.Diagnostics.AddError("Provider not found", fmt.Sprintf("No provider found with display name %q", name))
 			return
 		}
 		if len(matches) > 1 {
 			resp.Diagnostics.AddError("Provider name is ambiguous", fmt.Sprintf(
-				"%d providers are named %q: %s. Set id to the one you mean instead of name.",
+				"%d providers are named %q: %s. Set id to the one you mean instead of display_name.",
 				len(matches), name, strings.Join(matches, ", ")))
 			return
 		}
 	} else {
-		resp.Diagnostics.AddError("Missing required attribute", "Either id or name must be specified")
+		resp.Diagnostics.AddError("Missing required attribute", "Either id or display_name must be specified")
 		return
 	}
 
@@ -163,7 +163,7 @@ func (d *ProviderDataSource) Read(ctx context.Context, req datasource.ReadReques
 
 	config.ID = types.StringValue(provider.ID)
 	config.Key = types.StringValue(string(provider.Key))
-	config.Name = types.StringValue(provider.Name)
+	config.DisplayName = types.StringValue(provider.DisplayName)
 	config.Status = types.StringValue(string(provider.Status))
 	config.SyncFrequencyMinutes = types.Int64Value(int64(provider.SyncFrequencyMinutes))
 	config.CreatedAt = types.StringValue(provider.CreatedAt.Format(time.RFC3339))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"slices"
 	"strings"
 	"testing"
 
@@ -72,8 +73,8 @@ func tryUpgradeBudgetFrom(t *testing.T, version int64, raw []byte) (map[string]t
 		t.Fatal(err)
 	}
 	schema := schemas.ResourceSchemas["costfluent_budget"]
-	if schema.Version != 1 {
-		t.Fatalf("schema version = %d, want 1", schema.Version)
+	if schema.Version != 2 {
+		t.Fatalf("schema version = %d, want 2", schema.Version)
 	}
 
 	resp, err := server.UpgradeResourceState(ctx, &tfprotov6.UpgradeResourceStateRequest{
@@ -178,9 +179,31 @@ func TestBudgetUpgradeState_v021CarriesTheBudgetOver(t *testing.T) {
 		wantNull(t, attrs, name)
 	}
 
+	// Every threshold before forecast thresholds held the spend.
+	wantAlerts(t, attrs, "actual 80", "actual 100")
+}
+
+// wantAlerts fails unless the state's alerts are want, each written as "basis threshold".
+func wantAlerts(t *testing.T, attrs map[string]tftypes.Value, want ...string) {
+	t.Helper()
 	var alerts []tftypes.Value
-	if err := attrs["alerts"].As(&alerts); err != nil || len(alerts) != 2 {
-		t.Fatalf("alerts = %v (%v), want the two thresholds carried over", alerts, err)
+	if err := attrs["alerts"].As(&alerts); err != nil {
+		t.Fatalf("alerts: %v", err)
+	}
+	got := make([]string, 0, len(alerts))
+	for _, alert := range alerts {
+		var fields map[string]tftypes.Value
+		if err := alert.As(&fields); err != nil {
+			t.Fatalf("alert: %v", err)
+		}
+		basis, threshold := stringAttr(t, fields, "basis"), new(big.Float)
+		if err := fields["threshold_percent"].As(&threshold); err != nil || basis == nil {
+			t.Fatalf("alert = %v (%v), want a basis and a threshold", fields, err)
+		}
+		got = append(got, *basis+" "+threshold.String())
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("alerts = %v, want %v", got, want)
 	}
 }
 
@@ -293,8 +316,60 @@ func TestBudgetStateWithoutAMeasureIsNotReplaced(t *testing.T) {
 	wantString(t, attrs, "measure", "cost")
 }
 
-// planUpgradedBudget plans config, the configured attributes by name with alerts kept from the
-// upgraded state, against that state, and fails on an error diagnostic.
+// A budget's state as the last version 1 build wrote it, before forecast thresholds, upgrades with
+// each alert on the actual basis, and the configuration it was written from, which names no basis,
+// plans no change. A budget the API returned without alerts keeps none.
+func TestBudgetUpgradeState_FromVersion1(t *testing.T) {
+	t.Parallel()
+	v1State := func(alerts any) []byte {
+		return budgetStateJSON(map[string]any{
+			"id": "bud_1", "workspace_id": "wsp_1", "name": "Cloud", "amount": "1000", "currency": "EUR",
+			"measure": "cost", "usage_unit": nil, "start_date": "2026-10-01", "interval_count": 1,
+			"interval_unit": "month", "periods": nil, "segment_id": nil, "cost_report_id": "crp_1",
+			"app_ids": []any{"app_1"}, "alerts": alerts, "current_spend": "10.00000000", "percent_used": 1,
+			"spend_availability": "computed", "unconverted": []any{}, "history_floor": nil, "state": "onTrack",
+			"status": "active", "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-02T00:00:00Z",
+		})
+	}
+	upgradeV1 := func(t *testing.T, raw []byte) (map[string]tftypes.Value, tfprotov6.ProviderServer, *tfprotov6.UpgradeResourceStateResponse) {
+		t.Helper()
+		attrs, server, upgraded, diags := tryUpgradeBudgetFrom(t, 1, raw)
+		for _, d := range diags {
+			if d.Severity == tfprotov6.DiagnosticSeverityError {
+				t.Fatalf("upgrade failed: %s: %s", d.Summary, d.Detail)
+			}
+		}
+		return attrs, server, upgraded
+	}
+
+	attrs, server, upgraded := upgradeV1(t, v1State([]any{
+		map[string]any{"threshold_percent": 80}, map[string]any{"threshold_percent": 100},
+	}))
+	wantAlerts(t, attrs, "actual 80", "actual 100")
+	wantString(t, attrs, "id", "bud_1")
+	wantString(t, attrs, "measure", "cost")
+	wantString(t, attrs, "cost_report_id", "crp_1")
+	wantString(t, attrs, "updated_at", "2026-10-02T00:00:00Z")
+
+	prior, planned, plan := planUpgradedBudget(t, server, upgraded, map[string]any{
+		"workspace_id": "wsp_1", "name": "Cloud", "amount": "1000", "currency": "EUR", "cost_report_id": "crp_1",
+		"app_ids": []tftypes.Value{tftypes.NewValue(tftypes.String, "app_1")},
+		"alerts":  []map[string]any{{"threshold_percent": 80}, {"threshold_percent": 100}},
+	})
+	if diffs, err := prior.Diff(planned); err != nil || len(diffs) != 0 {
+		t.Fatalf("plan changes the upgraded state: %v %v", diffs, err)
+	}
+	if len(plan.RequiresReplace) != 0 {
+		t.Fatalf("plan replaces the budget: %v", plan.RequiresReplace)
+	}
+
+	attrs, _, _ = upgradeV1(t, v1State(nil))
+	wantNull(t, attrs, "alerts")
+}
+
+// planUpgradedBudget plans config, the configured attributes by name, against the upgraded state,
+// and fails on an error diagnostic. A list of objects is given as []map[string]any, each attribute
+// it leaves out null as in a configuration; alerts left out are kept from the upgraded state.
 func planUpgradedBudget(t *testing.T, server tfprotov6.ProviderServer, upgraded *tfprotov6.UpgradeResourceStateResponse, configured map[string]any) (prior, planned tftypes.Value, plan *tfprotov6.PlanResourceChangeResponse) {
 	t.Helper()
 	ctx := context.Background()
@@ -317,9 +392,14 @@ func planUpgradedBudget(t *testing.T, server tfprotov6.ProviderServer, upgraded 
 		config[name] = tftypes.NewValue(attrType, nil)
 	}
 	for name, value := range configured {
+		if elements, ok := value.([]map[string]any); ok {
+			value = objectList(objectType.AttributeTypes[name], elements)
+		}
 		config[name] = tftypes.NewValue(objectType.AttributeTypes[name], value)
 	}
-	config["alerts"] = priorAttrs["alerts"]
+	if _, ok := configured["alerts"]; !ok {
+		config["alerts"] = priorAttrs["alerts"]
+	}
 	configValue, err := tfprotov6.NewDynamicValue(objectType, tftypes.NewValue(objectType, config))
 	if err != nil {
 		t.Fatal(err)
@@ -357,4 +437,18 @@ func planUpgradedBudget(t *testing.T, server tfprotov6.ProviderServer, upgraded 
 		t.Fatal(err)
 	}
 	return prior, planned, plan
+}
+
+// objectList is the elements of a list of objects, each attribute an element leaves out null.
+func objectList(listType tftypes.Type, elements []map[string]any) []tftypes.Value {
+	objectType := listType.(tftypes.List).ElementType.(tftypes.Object)
+	values := make([]tftypes.Value, 0, len(elements))
+	for _, element := range elements {
+		attrs := map[string]tftypes.Value{}
+		for name, attrType := range objectType.AttributeTypes {
+			attrs[name] = tftypes.NewValue(attrType, element[name])
+		}
+		values = append(values, tftypes.NewValue(objectType, attrs))
+	}
+	return values
 }

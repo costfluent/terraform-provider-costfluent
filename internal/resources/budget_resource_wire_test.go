@@ -18,7 +18,9 @@ import (
 )
 
 // fakeBudgets serves /v1/budgets with the BudgetResponse shape, which create also returns. The API
-// returns alerts lowest threshold first, and the segment and report but not the workspace. One
+// returns the actual alerts lowest threshold first, then the forecast ones, a basis left out being
+// actual; sent alerts replace them in place, a threshold kept at its percent and basis keeping
+// whether it fired. It returns the segment and report but not the workspace. One
 // amount becomes two monthly periods from the start date, which defaults to 2026-10-01; periods
 // sent are stored as sent, at the API's scale. The measure defaults to cost, and a cost budget
 // answers a null unit. Nothing is left uncounted and the whole period is measured: no unconverted
@@ -31,15 +33,7 @@ func fakeBudgets(api *fakeapi.Server) {
 		Create: func(body map[string]any) map[string]any {
 			alerts := []any{}
 			if sent, ok := body["alerts"].([]any); ok {
-				for _, a := range sent {
-					a, _ := a.(map[string]any)
-					alerts = append(alerts, map[string]any{
-						"thresholdPercent": a["thresholdPercent"], "appIds": channels(body["appIds"]), "isTriggered": false,
-					})
-				}
-				slices.SortFunc(alerts, func(a, b any) int {
-					return cmp.Compare(a.(map[string]any)["thresholdPercent"].(float64), b.(map[string]any)["thresholdPercent"].(float64))
-				})
+				alerts = replaceAlerts(nil, sent, channels(body["appIds"]))
 			}
 			start, _ := body["startDate"].(string)
 			if start == "" {
@@ -108,6 +102,13 @@ func fakeBudgets(api *fakeapi.Server) {
 			if sent, ok := body["periods"]; ok {
 				setPeriods(obj, sent)
 			}
+			if sent, ok := body["alerts"].([]any); ok {
+				current := channels(nil)
+				if prior, _ := obj["alerts"].([]any); len(prior) > 0 {
+					current = prior[0].(map[string]any)["appIds"].([]any)
+				}
+				obj["alerts"] = replaceAlerts(obj["alerts"].([]any), sent, current)
+			}
 			if ids, ok := body["appIds"]; ok {
 				for _, a := range obj["alerts"].([]any) {
 					a.(map[string]any)["appIds"] = channels(ids)
@@ -116,6 +117,32 @@ func fakeBudgets(api *fakeapi.Server) {
 			obj["updatedAt"] = "2026-10-04T12:00:00Z"
 		},
 	})
+}
+
+// replaceAlerts is the sent thresholds in the API's order: a basis left out is actual, one kept at
+// the same percent and basis keeps whether it fired, and a new one starts armed on appIDs.
+func replaceAlerts(prior, sent, appIDs []any) []any {
+	alerts := make([]any, 0, len(sent))
+	for _, a := range sent {
+		a := a.(map[string]any)
+		basis, _ := a["basis"].(string)
+		if basis == "" {
+			basis = "actual"
+		}
+		alert := map[string]any{"thresholdPercent": a["thresholdPercent"], "basis": basis, "appIds": appIDs, "isTriggered": false}
+		for _, p := range prior {
+			if p := p.(map[string]any); p["thresholdPercent"] == a["thresholdPercent"] && p["basis"] == basis {
+				alert["isTriggered"] = p["isTriggered"]
+			}
+		}
+		alerts = append(alerts, alert)
+	}
+	slices.SortFunc(alerts, func(x, y any) int {
+		a, b := x.(map[string]any), y.(map[string]any)
+		return cmp.Or(cmp.Compare(a["basis"].(string), b["basis"].(string)),
+			cmp.Compare(a["thresholdPercent"].(float64), b["thresholdPercent"].(float64)))
+	})
+	return alerts
 }
 
 // setPeriods stores sent periods at the API's scale, with the amount they share or none.
@@ -446,6 +473,93 @@ func TestBudgetDefaultAlertsAreSent(t *testing.T) {
 				),
 			},
 			{Config: budgetConfig(api, "Platform", "500", ""), PlanOnly: true},
+		},
+	})
+}
+
+// Changing the thresholds updates the same budget in place, sending the whole new list with each
+// basis, and a forecast threshold reads back, plans nothing more and imports as configured.
+func TestBudgetAlertsChangeInPlace(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	fakeBudgets(api)
+	var id string
+	spendOnly := budgetConfig(api, "Platform", "500", "  alerts = [{ threshold_percent = 80 }, { threshold_percent = 100 }]\n")
+	withForecast := budgetConfig(api, "Platform", "500", "  alerts = [\n    { threshold_percent = 80 },\n"+
+		"    { threshold_percent = 90, basis = \"forecast\" },\n    { threshold_percent = 100, basis = \"forecast\" },\n  ]\n")
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: spendOnly,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.0.basis", "actual"),
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.1.basis", "actual"),
+					func(*terraform.State) error {
+						id = budgetOnlyID(t, api)
+						return nil
+					},
+				),
+			},
+			{
+				Config: withForecast,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("costfluent_budget.b", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.#", "3"),
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.0.threshold_percent", "80"),
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.0.basis", "actual"),
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.1.threshold_percent", "90"),
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.1.basis", "forecast"),
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.2.basis", "forecast"),
+					func(*terraform.State) error {
+						if got := budgetOnlyID(t, api); got != id {
+							return fmt.Errorf("an alerts change replaced budget %s with %s", id, got)
+						}
+						update := api.LastRequest(http.MethodPut, "/v1/budgets/"+id)
+						sent, _ := update.Body["alerts"].([]any)
+						if len(update.Body) != 1 || len(sent) != 3 {
+							return fmt.Errorf("update body = %s, want the three thresholds alone", update.Raw)
+						}
+						var got []string
+						for _, a := range sent {
+							a := a.(map[string]any)
+							got = append(got, fmt.Sprint(a["basis"], " ", a["thresholdPercent"]))
+						}
+						if want := "[actual 80 forecast 90 forecast 100]"; fmt.Sprint(got) != want {
+							return fmt.Errorf("update alerts = %v, want %s", got, want)
+						}
+						return nil
+					},
+				),
+			},
+			{Config: withForecast, PlanOnly: true},
+			{
+				ResourceName:      "costfluent_budget.b",
+				ImportState:       true,
+				ImportStateIdFunc: func(*terraform.State) (string, error) { return testWorkspace + ":" + id, nil },
+				ImportStateVerify: true,
+			},
+			// Back to the defaults, still in place.
+			{
+				Config: budgetConfig(api, "Platform", "500", ""),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("costfluent_budget.b", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.#", "3"),
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.2.threshold_percent", "100"),
+					resource.TestCheckResourceAttr("costfluent_budget.b", "alerts.2.basis", "actual"),
+					func(*terraform.State) error {
+						if got := budgetOnlyID(t, api); got != id {
+							return fmt.Errorf("returning to the default alerts replaced budget %s with %s", id, got)
+						}
+						return nil
+					},
+				),
+			},
 		},
 	})
 }
@@ -824,9 +938,9 @@ func TestBudgetNamesItsHistoryFloor(t *testing.T) {
 	})
 }
 
-// The API stores alerts lowest threshold first, so a configuration in another order would plan a
-// replacement after every import. It is refused at plan instead, and an ascending one imports
-// with nothing to change.
+// The API returns alerts lowest threshold first, so a configuration in another order could never
+// match the state. It is refused at plan instead, and an ascending one imports with nothing to
+// change.
 func TestBudgetImportWithAlertsOutOfOrder(t *testing.T) {
 	t.Parallel()
 	t.Run("descending is refused at plan", func(t *testing.T) {
@@ -837,7 +951,7 @@ func TestBudgetImportWithAlertsOutOfOrder(t *testing.T) {
 			ProtoV6ProviderFactories: factories,
 			Steps: []resource.TestStep{{
 				Config:      budgetConfig(api, "Platform", "500", "  alerts = [{ threshold_percent = 100 }, { threshold_percent = 50 }]\n"),
-				ExpectError: regexp.MustCompile(`(?s)threshold_percent.*lowest first.*\[50 100\]`),
+				ExpectError: regexp.MustCompile(`(?s)threshold_percent\s+lowest\s+first.*\[actual\s+50,\s+actual\s+100\]`),
 			}},
 		})
 		if ids := api.IDs("/v1/budgets"); len(ids) != 0 {
@@ -1086,20 +1200,45 @@ func TestBudgetRejectsInvalidConfigurationAtPlan(t *testing.T) {
   alerts = [{ threshold_percent = 201 }]`,
 			want: `must be between 1 and 200`,
 		},
-		// The API stores alerts lowest first, so any other order plans a replacement after import.
+		// The API returns alerts lowest first, so no other order matches the state.
 		"alerts out of order": {
 			config: `name = "b"
   amount = 1
   currency = "EUR"
   alerts = [{ threshold_percent = 80 }, { threshold_percent = 50 }]`,
-			want: `(?s)lowest first.*\[50 80\]`,
+			want: `(?s)lowest\s+first.*\[actual\s+50,\s+actual\s+80\]`,
 		},
 		"repeated threshold": {
 			config: `name = "b"
   amount = 1
   currency = "EUR"
   alerts = [{ threshold_percent = 80 }, { threshold_percent = 80 }]`,
-			want: `(?s)lowest first.*\[80\]`,
+			want: `(?s)lowest\s+first.*\[actual\s+80\]`,
+		},
+		// The API returns the actual thresholds before the forecast ones.
+		"forecast before actual": {
+			config: `name = "b"
+  amount = 1
+  currency = "EUR"
+  alerts = [{ threshold_percent = 100, basis = "forecast" }, { threshold_percent = 80 }]`,
+			want: `(?s)lowest\s+first.*\[actual\s+80,\s+forecast\s+100\]`,
+		},
+		"basis outside the enum": {
+			config: `name = "b"
+  amount = 1
+  currency = "EUR"
+  alerts = [{ threshold_percent = 80, basis = "Forecast" }]`,
+			want: `value must be one of`,
+		},
+		"forecast threshold on a usage budget": {
+			config: `name = "b"
+  amount = 1
+  currency = "EUR"
+  measure = "usage"
+  usage_unit = "Tokens"
+  cost_report_id = "crp_0000000000000000000001"
+  alerts = [{ threshold_percent = 80 }, { threshold_percent = 100, basis = "forecast" }]`,
+			want: `Unexpected forecast threshold`,
 		},
 		"measure outside the enum": {
 			config: `name = "b"

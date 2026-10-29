@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
+	"testing"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -140,3 +142,77 @@ func testAccKeepsID(address string, id *string) resource.TestCheckFunc {
 		return nil
 	}
 }
+
+// testAccUseSampleKey runs the test with COSTFLUENT_ACC_SAMPLE_API_KEY, a "Read only" token of the
+// seeded sample organization, whose cost history holds the anomalies, commitments and savings
+// findings the acceptance organization has none of. Without TF_ACC the test skips first, as every
+// acceptance test does, since CI's unit run sets CI but no TF_ACC. In an acceptance run without the
+// key the test fails under CI, so a runner that stops passing it cannot turn the findings tests into
+// silent skips, and skips elsewhere.
+func testAccUseSampleKey(t *testing.T) {
+	t.Helper()
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("acceptance tests run with TF_ACC set")
+	}
+	key := os.Getenv("COSTFLUENT_ACC_SAMPLE_API_KEY")
+	if key == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("COSTFLUENT_ACC_SAMPLE_API_KEY must hold the sample organization's Read only token under CI")
+		}
+		t.Skip("COSTFLUENT_ACC_SAMPLE_API_KEY holds no token of the seeded sample organization")
+	}
+	t.Setenv("COSTFLUENT_API_KEY", key)
+}
+
+// testAccCheckEveryElem checks that the list attribute list of address holds at least atLeast
+// elements, and that in every one each attribute named in checks passes its check.
+func testAccCheckEveryElem(address, list string, atLeast int, checks map[string]func(string) error) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[address]
+		if !ok {
+			return fmt.Errorf("%s not in state", address)
+		}
+		count, err := strconv.Atoi(rs.Primary.Attributes[list+".#"])
+		if err != nil {
+			return fmt.Errorf("%s: %s.# is not a count: %w", address, list, err)
+		}
+		if count < atLeast {
+			return fmt.Errorf("%s: %s holds %d elements, want at least %d", address, list, count, atLeast)
+		}
+		for i := range count {
+			for attr, check := range checks {
+				key := fmt.Sprintf("%s.%d.%s", list, i, attr)
+				if err := check(rs.Primary.Attributes[key]); err != nil {
+					return fmt.Errorf("%s: %s: %w", address, key, err)
+				}
+			}
+		}
+		return nil
+	}
+}
+
+// testAccEquals is a testAccCheckEveryElem check that the attribute is want.
+func testAccEquals(want string) func(string) error {
+	return func(got string) error {
+		if got != want {
+			return fmt.Errorf("got %q, want %q", got, want)
+		}
+		return nil
+	}
+}
+
+// testAccNotEmpty is a testAccCheckEveryElem check that the attribute holds a value.
+func testAccNotEmpty(got string) error {
+	if got == "" {
+		return fmt.Errorf("empty, want a value")
+	}
+	return nil
+}
+
+// testAccSampleWorkspace reads the seeded sample organization's one workspace, as
+// data.costfluent_workspace.sample.
+const testAccSampleWorkspace = `
+data "costfluent_workspace" "sample" {
+  name = "Default"
+}
+`

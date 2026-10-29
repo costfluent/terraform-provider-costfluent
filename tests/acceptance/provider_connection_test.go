@@ -17,21 +17,21 @@ func TestAccProvider_renamedInPlace(t *testing.T) {
 	config := func(name, extra string) string {
 		return fmt.Sprintf(`
 resource "costfluent_provider" "test" {
-  key         = "custom"
-  name        = %q
-  credentials = {}
+  key          = "custom"
+  display_name = %q
+  credentials  = {}
 %s}
 `, name, extra)
 	}
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: config(rName, "  description = \"Billing exports\"\n"),
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr("costfluent_provider.test", "name", rName),
+					resource.TestCheckResourceAttr("costfluent_provider.test", "display_name", rName),
 					testAccKeepsID("costfluent_provider.test", &id),
 				),
 			},
@@ -41,7 +41,7 @@ resource "costfluent_provider" "test" {
 					plancheck.ExpectResourceAction("costfluent_provider.test", plancheck.ResourceActionUpdate),
 				}},
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr("costfluent_provider.test", "name", rName+" renamed"),
+					resource.TestCheckResourceAttr("costfluent_provider.test", "display_name", rName+" renamed"),
 					resource.TestCheckNoResourceAttr("costfluent_provider.test", "description"),
 					testAccKeepsID("costfluent_provider.test", &id),
 				),

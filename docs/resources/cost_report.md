@@ -49,6 +49,24 @@ resource "costfluent_cost_report" "monthly_by_service" {
   }
 }
 
+# Each service as a category, this month's bar beside last month's: the group axis sets the
+# report's own grouping along the chart, for a bar or stacked bar chart in a bin other than
+# cumulative.
+resource "costfluent_cost_report" "services_side_by_side" {
+  workspace_id = costfluent_workspace.production.id
+  title        = "This month against last, by service"
+
+  date_interval = "ThisMonth"
+  date_bin      = "Month"
+  chart_type    = "Bar"
+  chart_axis    = "Group"
+  group_by      = [{ dimension = "ServiceName" }]
+
+  settings = {
+    compare_to_last_period = true
+  }
+}
+
 # The filter travels as the same JSON document the app puts in its URL, so a report saved here and
 # one saved in the app are the same definition.
 resource "costfluent_cost_report" "q4_eu_compute" {
@@ -118,6 +136,7 @@ resource "costfluent_cost_report" "checkout_team" {
 
 ### Optional
 
+- `chart_axis` (String) What the chart sets along its horizontal axis: `date`, or `group`, the report's grouping, which a `bar` or `stackedBar` chart of a grouped report in a bin other than `cumulative` draws. Left out, the report keeps its axis while its chart can draw it and draws by date otherwise.
 - `chart_type` (String) How the report is drawn.
 - `date_bin` (String) Bucket size the cost is grouped into over time.
 - `date_interval` (String) Relative window the report covers.
@@ -139,7 +158,7 @@ resource "costfluent_cost_report" "checkout_team" {
 
 Required:
 
-- `dimension` (String) One of Provider, ProviderName, SubAccount, ServiceName, Region, ResourceName, ChargeCategory, Tag, VirtualTag, Segment, Cluster, Namespace, BillingAccount, ServiceCategory, ServiceSubcategory, UsageUnit, ChargeClass, Tagged, ResourceId, CommitmentStatus, CommitmentType, PricingCategory, Sku. Cluster and Namespace group Kubernetes cost by the cluster and namespace it was allocated to.
+- `dimension` (String) One of Provider, ProviderName, SubAccount, ServiceName, Region, ResourceName, ChargeCategory, Tag, VirtualTag, Segment, Cluster, Namespace, BillingAccount, ServiceCategory, ServiceSubcategory, UsageUnit, ChargeClass, Tagged, ResourceId, CommitmentStatus, CommitmentType, PricingCategory, Sku, CommitmentId, Operation, ChargeDescription, ResourceType, ProductFamily, SkuId, InvoiceId, InvoiceIssuer, BillingPeriod, ResourceGroup. Cluster and Namespace group Kubernetes cost by the cluster and namespace it was allocated to.
 
 Optional:
 
@@ -158,8 +177,10 @@ Optional:
 - `include_tax` (Boolean)
 - `measure` (String) What the report charts: `cost`, `usage` (the consumed quantity, each unit apart) or `count` (distinct resources). A count has no `Cumulative` date bin. Defaults to `cost`.
 - `show_forecast` (Boolean)
-- `unit_cost_label_filter` (Attributes List) Which of the unit cost metric's values the cost is divided by: a value counts when its label in every listed column is one of that column's values. Each `key` is a label column of the metric, listed once. Needs `unit_cost_metric_id`; unset divides by every value. (see [below for nested schema](#nestedatt--settings--unit_cost_label_filter))
-- `unit_cost_metric_id` (String) A `costfluent_business_metric` of the report's workspace to chart cost per unit of: each bin's cost over the metric's amount in that bin. Needs the `cost` measure and a date bin other than `Cumulative`. Unset charts cost alone.
+- `unit_cost_calculation` (String) How the unit cost metric is charted: `perUnit`, each bin's cost or usage over the metric's amount; `grossMargin`, revenue less cost over revenue as a fraction, on the `cost` measure and a metric whose unit is the report's currency code; or `metricValue`, the metric's own amount, on any measure. Needs `unit_cost_metric_id`. Left out, a new report charts `perUnit` and an update keeps the report's own.
+- `unit_cost_label_filter` (Attributes List) Which of the unit cost metric's values the report counts: a value counts when its label in every listed column is one of that column's values. Each `key` is a label column of the metric, listed once. Needs `unit_cost_metric_id`; unset counts every value. (see [below for nested schema](#nestedatt--settings--unit_cost_label_filter))
+- `unit_cost_metric_id` (String) A `costfluent_business_metric` of the report's workspace to chart beside the report, bin by bin, as `unit_cost_calculation` says. Needs a date bin other than `Cumulative` and a measure the calculation charts. Unset charts the measure alone and returns the calculation and scale to `perUnit` and `1`.
+- `unit_cost_scale` (Number) How many units of the metric a `perUnit` figure is charted per: `1`, `100`, `1000`, `1000000` or `1000000000`. Other than `1` only with `perUnit` and `unit_cost_metric_id`. Left out, a new report charts per `1` and an update keeps the report's own.
 
 <a id="nestedatt--settings--unit_cost_label_filter"></a>
 ### Nested Schema for `settings.unit_cost_label_filter`

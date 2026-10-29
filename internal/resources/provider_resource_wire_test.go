@@ -22,7 +22,7 @@ func stubProviderAPI(t *testing.T, wireKey string) *httptest.Server {
 		created = true
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = fmt.Fprintf(w, `{"id":"prv_1","type":"cloud","key":%q,"name":"AWS prod"}`, wireKey)
+		_, _ = fmt.Fprintf(w, `{"id":"prv_1","type":"cloud","key":%q,"displayName":"AWS prod"}`, wireKey)
 	})
 	mux.HandleFunc("GET /v1/providers/prv_1", func(w http.ResponseWriter, _ *http.Request) {
 		if !created {
@@ -30,7 +30,7 @@ func stubProviderAPI(t *testing.T, wireKey string) *httptest.Server {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"id":"prv_1","type":"cloud","key":%q,"name":"AWS prod","status":"active",
+		_, _ = fmt.Fprintf(w, `{"id":"prv_1","type":"cloud","key":%q,"displayName":"AWS prod","status":"active",
 			"syncFrequencyMinutes":1440,"createdAt":"2026-10-04T00:00:00Z"}`, wireKey)
 	})
 	mux.HandleFunc("DELETE /v1/providers/prv_1", func(w http.ResponseWriter, _ *http.Request) {
@@ -60,7 +60,7 @@ provider "costfluent" {
 
 resource "costfluent_provider" "aws" {
   key         = %q
-  name        = "AWS prod"
+  display_name = "AWS prod"
   credentials = { role_arn = "arn:aws:iam::123456789012:role/CostfluentBillingRole" }
 }
 `, baseURL, key)

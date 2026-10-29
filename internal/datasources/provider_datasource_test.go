@@ -22,7 +22,7 @@ func syncedProviderJSON() map[string]any {
 		"id":                   awsProvider,
 		"type":                 "cloud",
 		"key":                  "aws",
-		"name":                 "AWS prod",
+		"displayName":          "AWS prod",
 		"description":          "Management account",
 		"status":               "active",
 		"lastSyncAt":           "2026-10-09T03:00:00Z",
@@ -40,7 +40,7 @@ func newProviderJSON() map[string]any {
 		"id":                   gcpProvider,
 		"type":                 "cloud",
 		"key":                  "gcp",
-		"name":                 "GCP billing",
+		"displayName":          "GCP billing",
 		"status":               "pending",
 		"syncFrequencyMinutes": 360,
 		"createdAt":            "2026-10-08T10:00:00Z",
@@ -73,7 +73,7 @@ data "costfluent_provider" "p" {
 `, awsProvider),
 			Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "key", "aws"),
-				resource.TestCheckResourceAttr("data.costfluent_provider.p", "name", "AWS prod"),
+				resource.TestCheckResourceAttr("data.costfluent_provider.p", "display_name", "AWS prod"),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "description", "Management account"),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "status", "active"),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "sync_frequency_minutes", "1440"),
@@ -87,9 +87,9 @@ data "costfluent_provider" "p" {
 	})
 }
 
-// A name is looked up across every page, and a provider that has never synced reads with its sync
+// A display name is looked up across every page, and a provider that has never synced reads with its sync
 // fields null, not as zero timestamps.
-func TestProviderDataSourceFindsANameOnALaterPage(t *testing.T) {
+func TestProviderDataSourceFindsADisplayNameOnALaterPage(t *testing.T) {
 	t.Parallel()
 	api := fakeapi.New(t)
 	fakeProviderPages(api)
@@ -99,7 +99,7 @@ func TestProviderDataSourceFindsANameOnALaterPage(t *testing.T) {
 		Steps: []resource.TestStep{{
 			Config: api.ProviderBlock() + `
 data "costfluent_provider" "p" {
-  name = "GCP billing"
+  display_name = "GCP billing"
 }
 `,
 			Check: resource.ComposeAggregateTestCheckFunc(
@@ -123,8 +123,8 @@ func TestProviderDataSourceRefusesBadLookups(t *testing.T) {
 		body string
 		want string
 	}{
-		"unknown name":        {`name = "Azure"`, `No provider found with name "Azure"`},
-		"neither id nor name": {``, `Either id or name must be specified`},
+		"unknown display name":        {`display_name = "Azure"`, `No provider found with display name "Azure"`},
+		"neither id nor display name": {``, `Either id or display_name must be specified`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -142,14 +142,14 @@ func TestProviderDataSourceRefusesBadLookups(t *testing.T) {
 	}
 }
 
-// A connection made without a name is named after its type, so a name can match several
+// A connection made without a display name is named after its type, so one can match several
 // connections. Taking the first would bind whichever account the listing happens to return first.
-func TestProviderDataSourceRefusesANameSeveralProvidersShare(t *testing.T) {
+func TestProviderDataSourceRefusesADisplayNameSeveralProvidersShare(t *testing.T) {
 	t.Parallel()
 	const secondAWS = "prv_0000000000000000000003"
 	aws := func(id, externalID string) map[string]any {
 		p := map[string]any{
-			"id": id, "type": "cloud", "key": "aws", "name": "Amazon Web Services", "status": "active",
+			"id": id, "type": "cloud", "key": "aws", "displayName": "Amazon Web Services", "status": "active",
 			"syncFrequencyMinutes": 1440, "createdAt": "2026-09-01T08:30:00Z",
 		}
 		if externalID != "" {
@@ -195,7 +195,7 @@ func TestProviderDataSourceRefusesANameSeveralProvidersShare(t *testing.T) {
 			resource.UnitTest(t, resource.TestCase{
 				ProtoV6ProviderFactories: factories,
 				Steps: []resource.TestStep{{
-					Config:      api.ProviderBlock() + "data \"costfluent_provider\" \"p\" {\n  name = \"Amazon Web Services\"\n}\n",
+					Config:      api.ProviderBlock() + "data \"costfluent_provider\" \"p\" {\n  display_name = \"Amazon Web Services\"\n}\n",
 					ExpectError: regexp.MustCompile(`2\s+providers\s+are\s+named\s+"Amazon\s+Web\s+Services":\s+` + tc.want + `(.|\n)*Set\s+id`),
 				}},
 			})
@@ -216,7 +216,7 @@ func TestProviderDataSourceSurfacesAPIErrors(t *testing.T) {
 			`Failed to read provider(.|\n)*does not exist`,
 		},
 		"listing forbidden": {
-			`name = "AWS prod"`, "/v1/providers",
+			`display_name = "AWS prod"`, "/v1/providers",
 			fakeapi.Problem(http.StatusForbidden, "Forbidden", "token lacks providers:read"),
 			`Failed to list providers(.|\n)*token lacks providers:read`,
 		},

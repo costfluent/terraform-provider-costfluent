@@ -18,7 +18,7 @@ func TestAccDashboard_lifecycle(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 	var created trackedObject
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_dashboard", dashboardExists),
@@ -89,7 +89,7 @@ func TestAccDashboard_presetKeepsTheConfiguredDatesTheAPIIgnores(t *testing.T) {
 		resource.TestCheckResourceAttr("costfluent_dashboard.test", "end_date", "2026-08-31"),
 	)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_dashboard", dashboardExists),
@@ -145,7 +145,7 @@ func TestAccDashboard_defaultTakenOutsideTerraformIsRestoredInPlace(t *testing.T
 	var dashboard, widget trackedObject
 	var otherID string
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_dashboard", dashboardExists),

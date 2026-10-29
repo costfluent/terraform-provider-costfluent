@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
@@ -44,12 +45,14 @@ func TestAccTeam_withWorkspaceAccess(t *testing.T) {
 		CheckDestroy:             testAccCheckGone("costfluent_team", teamExists),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTeamConfig(rName, rName, "canView"),
+				Config: testAccTeamConfig(rName, rName, "canView", "first"),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("costfluent_team.test", "name", rName),
 					resource.TestCheckResourceAttrSet("costfluent_team.test", "created_at"),
 					resource.TestCheckResourceAttr("costfluent_team_workspace_access.test", "access_level", "canView"),
-					testAccCheckTeamAccess("costfluent_team.test", "canView"),
+					resource.TestCheckResourceAttrPair("costfluent_team_workspace_access.test", "default_dashboard_id",
+						"costfluent_dashboard.first", "id"),
+					testAccCheckTeamAccess("costfluent_team.test", "canView", "costfluent_dashboard.first"),
 					testAccRemember("costfluent_team.test", &team),
 				),
 			},
@@ -64,10 +67,19 @@ func TestAccTeam_withWorkspaceAccess(t *testing.T) {
 				ImportStateVerify: true,
 			},
 			{
-				Config: testAccTeamConfig(rName, rName+" renamed", "canEdit"),
+				Config: testAccTeamConfig(rName, rName+" renamed", "canEdit", "second"),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("costfluent_team.test", "name", rName+" renamed"),
-					testAccCheckTeamAccess("costfluent_team.test", "canEdit"),
+					resource.TestCheckResourceAttrPair("costfluent_team_workspace_access.test", "default_dashboard_id",
+						"costfluent_dashboard.second", "id"),
+					testAccCheckTeamAccess("costfluent_team.test", "canEdit", "costfluent_dashboard.second"),
+				),
+			},
+			{
+				Config: testAccTeamConfig(rName, rName+" renamed", "canEdit", ""),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckNoResourceAttr("costfluent_team_workspace_access.test", "default_dashboard_id"),
+					testAccCheckTeamAccess("costfluent_team.test", "canEdit", ""),
 				),
 			},
 			{
@@ -83,7 +95,7 @@ func TestAccTeam_withWorkspaceAccess(t *testing.T) {
 func TestAccTeam_readAndWriteTokenIsRefused(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_team", teamExists),
@@ -98,34 +110,74 @@ resource "costfluent_team" "test" {
 	})
 }
 
-func testAccTeamConfig(name, teamName, level string) string {
+// testAccTeamConfig grants the team level on the fixture workspace, which holds two dashboards, and
+// makes the one named by defaultDashboard ("first" or "second") the team's default there, or none
+// when it is empty.
+func testAccTeamConfig(name, teamName, level, defaultDashboard string) string {
+	defaultAttr := ""
+	if defaultDashboard != "" {
+		defaultAttr = fmt.Sprintf("  default_dashboard_id = costfluent_dashboard.%s.id\n", defaultDashboard)
+	}
 	return testAccWorkspaceFixture(name) + fmt.Sprintf(`
+resource "costfluent_dashboard" "first" {
+  workspace_id = costfluent_workspace.fixture.id
+  title        = "%[1]s first"
+}
+
+resource "costfluent_dashboard" "second" {
+  workspace_id = costfluent_workspace.fixture.id
+  title        = "%[1]s second"
+}
+
 resource "costfluent_team" "test" {
-  name = %q
+  name = %[2]q
 }
 
 resource "costfluent_team_workspace_access" "test" {
   team_id      = costfluent_team.test.id
   workspace_id = costfluent_workspace.fixture.id
-  access_level = %q
-}
-`, teamName, level)
+  access_level = %[3]q
+%[4]s}
+`, name, teamName, level, defaultAttr)
 }
 
-// testAccCheckTeamAccess reads the team back through the API and finds the fixture workspace at level.
-func testAccCheckTeamAccess(address, level string) resource.TestCheckFunc {
+// testAccCheckTeamAccess reads the team back through the API and finds the fixture workspace at
+// level, with the dashboard at dashboardAddress as its default, or none when that is empty.
+func testAccCheckTeamAccess(address, level, dashboardAddress string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		team := s.RootModule().Resources[address].Primary.ID
 		workspace := s.RootModule().Resources["costfluent_workspace.fixture"].Primary.ID
+		var dashboard *string
+		if dashboardAddress != "" {
+			id := s.RootModule().Resources[dashboardAddress].Primary.ID
+			dashboard = &id
+		}
 		detail, err := testAccClient().GetTeam(context.Background(), team)
 		if err != nil {
 			return err
 		}
 		if !slices.ContainsFunc(detail.WorkspaceAccess, func(a costfluent.TeamWorkspaceAccess) bool {
-			return a.WorkspaceID == workspace && a.AccessLevel == level
+			return a.WorkspaceID == workspace && a.AccessLevel == level &&
+				(a.DefaultDashboardID == nil) == (dashboard == nil) && (dashboard == nil || *a.DefaultDashboardID == *dashboard)
 		}) {
-			return fmt.Errorf("team %s access = %+v, want %s on %s", team, detail.WorkspaceAccess, level, workspace)
+			return fmt.Errorf("team %s access = %s, want %s on %s with default dashboard %s",
+				team, describeTeamAccess(detail.WorkspaceAccess), level, workspace, describeDashboard(dashboard))
 		}
 		return nil
 	}
+}
+
+func describeTeamAccess(grants []costfluent.TeamWorkspaceAccess) string {
+	described := make([]string, len(grants))
+	for i, g := range grants {
+		described[i] = fmt.Sprintf("%s at %s with default dashboard %s", g.WorkspaceID, g.AccessLevel, describeDashboard(g.DefaultDashboardID))
+	}
+	return "[" + strings.Join(described, "; ") + "]"
+}
+
+func describeDashboard(id *string) string {
+	if id == nil {
+		return "none"
+	}
+	return *id
 }
