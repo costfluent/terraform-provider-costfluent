@@ -21,7 +21,7 @@ output "provider_count" {
 }
 
 output "provider_names" {
-  value = [for p in data.costfluent_providers.all.providers : p.name]
+  value = [for p in data.costfluent_providers.all.providers : p.display_name]
 }
 
 # Filter to find AWS providers
@@ -44,10 +44,10 @@ Read-Only:
 
 - `created_at` (String) Creation timestamp.
 - `description` (String) Provider description.
+- `display_name` (String) Provider display name.
 - `id` (String) Provider ID.
 - `key` (String) Provider type key.
 - `last_sync_at` (String) Last sync timestamp.
 - `last_sync_status` (String) Last sync status.
-- `name` (String) Provider name.
 - `status` (String) Provider status.
 - `sync_frequency_minutes` (Number) Sync frequency in minutes.

@@ -45,7 +45,8 @@ func workspaceStoredSpelling(field string, value any) any {
 
 // fakeWorkspaces serves /v1/workspaces with the WorkspaceCreatedResponse and WorkspaceResponse
 // shapes. A new workspace starts on the defaults the API gives it: conversion into its own
-// currency by monthly average, automatic syncing on, UTC unless a zone is sent.
+// currency by monthly average, automatic syncing on, commitment discounts as applied, UTC unless a
+// zone is sent.
 func fakeWorkspaces(api *fakeapi.Server) {
 	api.Collection("/v1/workspaces", fakeapi.Collection{
 		IDPrefix:  "wsp_",
@@ -65,6 +66,7 @@ func fakeWorkspaces(api *fakeapi.Server) {
 				"conversionCurrency":             body["currency"],
 				"conversionMethod":               "monthlyAverage",
 				"enableAutomaticSyncing":         true,
+				"blendCommitmentDiscounts":       false,
 				"anomaliesExcludeMarketplace":    true,
 				"anomaliesExcludeCommitmentFees": true,
 				"anomalyNotificationThreshold":   "0.00000000",
@@ -136,6 +138,7 @@ func TestWorkspaceLifecycleSendsTheContractShape(t *testing.T) {
 					resource.TestCheckResourceAttr("costfluent_workspace.w", "conversion_currency", "EUR"),
 					resource.TestCheckResourceAttr("costfluent_workspace.w", "conversion_method", "monthlyAverage"),
 					resource.TestCheckResourceAttr("costfluent_workspace.w", "enable_automatic_syncing", "true"),
+					resource.TestCheckResourceAttr("costfluent_workspace.w", "blend_commitment_discounts", "false"),
 					resource.TestCheckResourceAttr("costfluent_workspace.w", "time_zone", "UTC"),
 					resource.TestCheckResourceAttr("costfluent_workspace.w", "provider_count", "0"),
 					resource.TestCheckResourceAttr("costfluent_workspace.w", "created_at", "2026-10-01T09:30:00Z"),
@@ -190,6 +193,61 @@ func TestWorkspaceLifecycleSendsTheContractShape(t *testing.T) {
 				return fmt.Errorf("workspaces left after destroy: %v", ids)
 			}
 			return nil
+		},
+	})
+}
+
+// A workspace starts with commitment discounts as applied. A configuration that blends them is
+// applied as the create's settings update, turning it off later sends false alone, and the next
+// plan is empty.
+func TestWorkspaceBlendCommitmentDiscountsIsAppliedAndChangedInPlace(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	fakeWorkspaces(api)
+	lastUpdate := func() fakeapi.Request {
+		return api.LastRequest(http.MethodPut, "/v1/workspaces/"+workspaceOnlyID(t, api))
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: workspaceConfig(api, "Platform", "  blend_commitment_discounts = true\n"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_workspace.w", "blend_commitment_discounts", "true"),
+					func(*terraform.State) error {
+						create := api.LastRequest(http.MethodPost, "/v1/workspaces")
+						if _, sent := create.Body["blendCommitmentDiscounts"]; sent {
+							return fmt.Errorf("create body = %s, want the blend left to the settings update", create.Raw)
+						}
+						if update := lastUpdate(); len(update.Body) != 1 || update.Body["blendCommitmentDiscounts"] != true {
+							return fmt.Errorf("settings body = %s, want blendCommitmentDiscounts true only", update.Raw)
+						}
+						return nil
+					},
+				),
+			},
+			{
+				Config: workspaceConfig(api, "Platform", ""),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("costfluent_workspace.w", plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_workspace.w", "blend_commitment_discounts", "false"),
+					func(*terraform.State) error {
+						if update := lastUpdate(); len(update.Body) != 1 || update.Body["blendCommitmentDiscounts"] != false {
+							return fmt.Errorf("update body = %s, want blendCommitmentDiscounts false only", update.Raw)
+						}
+						return nil
+					},
+				),
+			},
+			{
+				Config:   workspaceConfig(api, "Platform", ""),
+				PlanOnly: true,
+			},
 		},
 	})
 }

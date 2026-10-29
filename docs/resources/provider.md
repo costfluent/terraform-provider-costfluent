@@ -29,8 +29,8 @@ variable "azure_client_secret" {
 # The role must trust data.costfluent_aws_provider_info's principal_arn with its external_id;
 # Costfluent adds the external ID itself, so the credentials carry only the role.
 resource "costfluent_provider" "aws_main" {
-  key  = "aws"
-  name = "AWS Production"
+  key          = "aws"
+  display_name = "AWS Production"
   credentials = {
     role_arn = "arn:aws:iam::123456789012:role/CostfluentBillingRole"
   }
@@ -41,8 +41,8 @@ resource "costfluent_provider" "aws_main" {
 }
 
 resource "costfluent_provider" "azure" {
-  key  = "azure"
-  name = "Azure Production"
+  key          = "azure"
+  display_name = "Azure Production"
   credentials = {
     tenant   = var.azure_tenant_id
     appId    = var.azure_client_id
@@ -57,15 +57,15 @@ resource "costfluent_provider" "azure" {
 ### Required
 
 - `credentials` (Map of String, Sensitive) Provider credentials: role_arn for AWS; tenant, appId and password for Azure; billing_account_id, project_id and bigquery_dataset for GCP; admin_key for Anthropic and OpenAI. Sensitive hides them from plan output, but the Terraform state holds them in plaintext, so keep state in an encrypted backend with restricted access.
+- `display_name` (String) Display name for the provider. Changing it renames the connection in place; it keeps its ID and the costs it has collected.
 - `key` (String) Provider type key (e.g., aws, azure, gcp, kubernetes), as the Public API spells it.
-- `name` (String) Display name for the provider. Changing it renames the connection in place; it keeps its ID and the costs it has collected.
 
 ### Optional
 
 - `description` (String) Provider description.
 - `external_id` (String) The account identity the provider verified when connecting: the AWS account, the Azure tenant or the GCP billing account. Not the AWS assume-role external ID, which Costfluent issues and adds itself.
 - `parent_provider_id` (String) Parent provider ID for linked accounts. Fixed once connected: a plan that changes it is refused.
-- `settings` (Map of String) Provider-specific settings: export_bucket, export_bucket_region, export_prefix and export_name for an AWS FOCUS export, carbon_export_name for the AWS carbon emissions Data Export beside it, and carbon_dataset for a GCP Carbon Footprint export dataset. Write-only: the API does not return them, so a change made outside Terraform is not detected. Changing them updates the provider in place, and removing or emptying them clears them.
+- `settings` (Map of String) Provider-specific settings: export_bucket, export_bucket_region, export_prefix and export_name for an AWS FOCUS export, carbon_export_name for the AWS carbon emissions Data Export beside it, carbon_dataset for a GCP Carbon Footprint export dataset, cud_dataset for a GCP committed use discount metadata export dataset, and billing_scope for an Azure connection that collects a billing scope instead of its subscriptions: billingAccounts/{enrollment} for an Enterprise Agreement, or billingAccounts/{billing account id} or billingAccounts/{billing account id}/billingProfiles/{billing profile id} for a Microsoft Customer Agreement. Write-only: the API does not return them, so a change made outside Terraform is not detected. Changing them updates the provider in place, and removing or emptying them clears them.
 - `sync_frequency_minutes` (Number) Sync frequency in minutes, 60 to 1440. Defaults to 1440 (once a day).
 
 ### Read-Only

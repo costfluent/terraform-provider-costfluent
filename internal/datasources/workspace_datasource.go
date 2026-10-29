@@ -25,7 +25,8 @@ type WorkspaceDataSourceModel struct {
 	Currency types.String `tfsdk:"currency"`
 	TimeZone types.String `tfsdk:"time_zone"`
 
-	EnableAutomaticSyncing types.Bool `tfsdk:"enable_automatic_syncing"`
+	EnableAutomaticSyncing   types.Bool `tfsdk:"enable_automatic_syncing"`
+	BlendCommitmentDiscounts types.Bool `tfsdk:"blend_commitment_discounts"`
 
 	CreatedAt types.String `tfsdk:"created_at"`
 	UpdatedAt types.String `tfsdk:"updated_at"`
@@ -64,6 +65,11 @@ func (d *WorkspaceDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 			"enable_automatic_syncing": schema.BoolAttribute{
 				Computed:    true,
 				Description: "Whether Costfluent collects from this workspace's data sources on its own schedule.",
+			},
+			"blend_commitment_discounts": schema.BoolAttribute{
+				Computed: true,
+				Description: "Whether every amortized figure of this workspace spreads each day's AWS Savings Plan " +
+					"and Reserved Instance discount evenly across the usage it could cover.",
 			},
 			"created_at": schema.StringAttribute{
 				Computed:    true,
@@ -134,6 +140,7 @@ func (d *WorkspaceDataSource) Read(ctx context.Context, req datasource.ReadReque
 	config.Currency = types.StringValue(workspace.Currency)
 	config.TimeZone = types.StringValue(workspace.TimeZone)
 	config.EnableAutomaticSyncing = types.BoolValue(workspace.EnableAutomaticSyncing)
+	config.BlendCommitmentDiscounts = types.BoolValue(workspace.BlendCommitmentDiscounts)
 	config.CreatedAt = types.StringValue(workspace.CreatedAt.Format(time.RFC3339))
 
 	if workspace.UpdatedAt != nil {

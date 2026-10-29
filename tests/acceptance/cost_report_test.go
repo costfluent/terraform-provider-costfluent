@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
@@ -24,7 +25,7 @@ func TestAccCostReport_lifecycle(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 	var created trackedObject
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_cost_report", costReportExists),
@@ -66,6 +67,75 @@ func TestAccCostReport_lifecycle(t *testing.T) {
 				Config: testAccWorkspaceFixture(rName),
 				Check:  testAccCheckRemoved(&created, costReportExists),
 			},
+		},
+	})
+}
+
+// A report grouped by commitment and filtered to one round-trips: the Public API takes the
+// dimension and the CommitmentId field, and an import reads both back. Written in the spellings
+// the API returns, as the lifecycle test explains, so the import plans nothing.
+func TestAccCostReport_groupedByCommitment(t *testing.T) {
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_cost_report", costReportExists),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccCostReportConfig(rName, rName, "last30Days", `[{ dimension = "commitmentId" }]`,
+					`jsonencode([{ field = "CommitmentId", operator = "In", values = ["arn:aws:savingsplans::111122223333:savingsplan/sp-1"] }])`),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.test", "group_by.#", "1"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.test", "group_by.0.dimension", "commitmentId"),
+					resource.TestCheckResourceAttrWith("costfluent_cost_report.test", "filter", func(value string) error {
+						if !strings.Contains(value, "arn:aws:savingsplans::111122223333:savingsplan/sp-1") {
+							return fmt.Errorf("filter %q does not name the Savings Plan", value)
+						}
+						return nil
+					}),
+				),
+			},
+			testAccImportPlansNothing("costfluent_cost_report.test"),
+		},
+	})
+}
+
+// A bar chart of a grouped report keeps the group axis it was given; changed to a line chart that
+// leaves the axis out, it is drawn by date, which the next plan reads as no change.
+func TestAccCostReport_chartAxis(t *testing.T) {
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+	config := func(chart string) string {
+		return testAccWorkspaceFixture(rName) + fmt.Sprintf(`
+resource "costfluent_cost_report" "test" {
+  workspace_id = costfluent_workspace.fixture.id
+  title        = %q
+  group_by     = [{ dimension = "serviceName" }]
+%s}
+`, rName, chart)
+	}
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_cost_report", costReportExists),
+		Steps: []resource.TestStep{
+			{
+				Config: config("  chart_type = \"bar\"\n  chart_axis = \"group\"\n"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.test", "chart_type", "bar"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.test", "chart_axis", "group"),
+				),
+			},
+			testAccImportPlansNothing("costfluent_cost_report.test"),
+			{
+				Config: config("  chart_type = \"line\"\n"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.test", "chart_type", "line"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.test", "chart_axis", "date"),
+				),
+			},
+			{Config: config("  chart_type = \"line\"\n"), PlanOnly: true},
 		},
 	})
 }
@@ -120,7 +190,7 @@ resource "costfluent_cost_report" "test" {
 		resource.TestCheckResourceAttr("costfluent_cost_report.test", "end_date", "2026-03-31"),
 	)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_cost_report", costReportExists),
@@ -172,7 +242,7 @@ resource "costfluent_cost_report" "test" {
 		},
 	)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_cost_report", costReportExists),
@@ -201,7 +271,7 @@ resource "costfluent_cost_report" "test" {
 func TestAccCostReport_unsetSettingsTakeTheWorkspaceDefaults(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_cost_report", costReportExists),
@@ -247,7 +317,7 @@ resource "costfluent_cost_report" "test" {
 	}
 	start, end := "2026-09-01", "2026-09-30"
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_cost_report", costReportExists),
@@ -327,7 +397,7 @@ resource "costfluent_cost_report" "test" {
 		return nil
 	}
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_cost_report", costReportExists),

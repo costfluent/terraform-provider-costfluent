@@ -30,8 +30,10 @@ const (
 // costReportFake serves /v1/cost-reports with the CostReportCreatedResponse and CostReportResponse
 // shapes. Like the API it stores a CQL filter as its JSON document, defaults the chart, range,
 // grouping and settings a create leaves out (amortize standing for a workspace default that differs
-// from false), leaves out of an update what was omitted, settings flags included, and removes the
-// filter only on clearFilter and the folder only on clearFolder.
+// from false), leaves out of an update what was omitted, settings flags included, removes the
+// filter only on clearFilter and the folder only on clearFolder, and draws by date a report whose
+// chart can no longer draw the group axis an update left out. It keeps the unit cost calculation and
+// scale beside a metric the settings name and returns them to per unit, per 1, without one.
 func costReportFake(api *fakeapi.Server) {
 	api.Collection("/v1/cost-reports", fakeapi.Collection{
 		IDPrefix:  "crp_",
@@ -41,11 +43,13 @@ func costReportFake(api *fakeapi.Server) {
 			obj := map[string]any{
 				"title":        body["title"],
 				"chartType":    "bar",
+				"chartAxis":    "date",
 				"dateBin":      "day",
 				"dateInterval": "thisMonth",
 				"groupBy":      []any{map[string]any{"dimension": "ServiceName"}},
 				"settings": map[string]any{"amortize": true, "includeCredits": false, "includeRefunds": false,
-					"includeTax": false, "showForecast": false, "compareToLastPeriod": false, "measure": "cost"},
+					"includeTax": false, "showForecast": false, "compareToLastPeriod": false, "measure": "cost",
+					"unitCostCalculation": "perUnit", "unitCostScale": 1},
 				"createdAt": "2026-10-05T09:00:00Z",
 			}
 			costReportApply(obj, body)
@@ -82,16 +86,22 @@ func costReportApply(obj, body map[string]any) {
 				}
 			}
 		}
+		if sent["unitCostMetricId"] == nil {
+			settings["unitCostCalculation"], settings["unitCostScale"] = "perUnit", 1
+		}
 		for k, v := range sent {
 			settings[k] = v
 		}
 		obj["settings"] = settings
 	}
-	for _, k := range []string{"title", "folderId", "chartType", "dateBin", "dateInterval", "startDate", "endDate",
+	for _, k := range []string{"title", "folderId", "chartType", "chartAxis", "dateBin", "dateInterval", "startDate", "endDate",
 		"groupBy"} {
 		if v, ok := body[k]; ok && v != nil {
 			obj[k] = v
 		}
+	}
+	if chart := obj["chartType"]; obj["chartAxis"] == "group" && chart != "bar" && chart != "stackedBar" {
+		obj["chartAxis"] = "date"
 	}
 	if groups, ok := obj["groupBy"].([]any); ok {
 		for _, g := range groups {
@@ -269,6 +279,95 @@ func TestCostReportLifecycleSendsTheContractShape(t *testing.T) {
 				return fmt.Errorf("cost reports left after destroy: %v", ids)
 			}
 			return nil
+		},
+	})
+}
+
+// A configured group axis is sent on create and on update, and read back without a diff.
+func TestCostReportChartAxisIsSentAndKept(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	costReportFake(api)
+	grouped := costReportConfig(api, "  title      = \"Side by side\"\n  chart_type = \"bar\"\n  chart_axis = \"group\"\n")
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: grouped,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "chart_axis", "group"),
+					func(*terraform.State) error {
+						if create := api.LastRequest(http.MethodPost, "/v1/cost-reports"); create.Body["chartAxis"] != "group" {
+							return fmt.Errorf("create body = %s", create.Raw)
+						}
+						return nil
+					},
+				),
+			},
+			{Config: grouped, PlanOnly: true},
+			{
+				Config: costReportConfig(api, "  title      = \"Side by side\"\n  chart_type = \"stackedBar\"\n  chart_axis = \"group\"\n"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "chart_axis", "group"),
+					func(*terraform.State) error {
+						update := api.LastRequest(http.MethodPut, "/v1/cost-reports/"+costReportOnlyID(t, api))
+						if update.Body["chartAxis"] != "group" || update.Body["chartType"] != "stackedBar" {
+							return fmt.Errorf("update body = %s", update.Raw)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// Left out, the axis is the API's: none is sent, a report the app put on the group axis plans no
+// drift, and a chart type that cannot draw it reads back by date rather than failing the update.
+func TestCostReportChartAxisLeftOutTakesTheAPIDefault(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	costReportFake(api)
+	bars := costReportConfig(api, "  title      = \"Bars\"\n  chart_type = \"bar\"\n")
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: bars,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "chart_axis", "date"),
+					func(*terraform.State) error {
+						create := api.LastRequest(http.MethodPost, "/v1/cost-reports")
+						if _, sent := create.Body["chartAxis"]; sent {
+							return fmt.Errorf("create sent an unset chartAxis: %s", create.Raw)
+						}
+						return nil
+					},
+				),
+			},
+			{
+				PreConfig: func() {
+					api.Update("/v1/cost-reports", costReportOnlyID(t, api), func(obj map[string]any) { obj["chartAxis"] = "group" })
+				},
+				Config:   bars,
+				PlanOnly: true,
+			},
+			{
+				Config: costReportConfig(api, "  title      = \"Bars\"\n  chart_type = \"line\"\n"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "chart_type", "line"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "chart_axis", "date"),
+					func(*terraform.State) error {
+						update := api.LastRequest(http.MethodPut, "/v1/cost-reports/"+costReportOnlyID(t, api))
+						if _, sent := update.Body["chartAxis"]; sent {
+							return fmt.Errorf("update sent an unset chartAxis: %s", update.Raw)
+						}
+						return nil
+					},
+				),
+			},
 		},
 	})
 }
@@ -905,6 +1004,159 @@ func TestCostReportUnitCostLabelFilterIsSentAndCleared(t *testing.T) {
 						return nil
 					},
 				),
+			},
+		},
+	})
+}
+
+// A gross margin and a per thousand scale are sent when configured and read back, and a plan of the
+// same configuration changes nothing.
+func TestCostReportUnitCostCalculationIsSentAndKept(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	costReportFake(api)
+	sentSettings := func(method, path string) map[string]any {
+		settings, _ := api.LastRequest(method, path).Body["settings"].(map[string]any)
+		return settings
+	}
+	perThousand := costReportConfig(api, `
+  title    = "Cost per thousand customers"
+  settings = {
+    unit_cost_metric_id   = "bmt_0000000000000000000001"
+    unit_cost_calculation = "perUnit"
+    unit_cost_scale       = 1000
+  }
+`)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: costReportConfig(api, `
+  title    = "Margin"
+  settings = {
+    unit_cost_metric_id   = "bmt_0000000000000000000001"
+    unit_cost_calculation = "grossMargin"
+  }
+`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "settings.unit_cost_calculation", "grossMargin"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "settings.unit_cost_scale", "1"),
+					func(*terraform.State) error {
+						settings := sentSettings(http.MethodPost, "/v1/cost-reports")
+						if settings["unitCostCalculation"] != "grossMargin" {
+							return fmt.Errorf("create settings = %v, want the gross margin", settings)
+						}
+						if _, sent := settings["unitCostScale"]; sent {
+							return fmt.Errorf("create sent a scale the configuration does not name: %v", settings)
+						}
+						return nil
+					},
+				),
+			},
+			{
+				Config: perThousand,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "settings.unit_cost_calculation", "perUnit"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "settings.unit_cost_scale", "1000"),
+					func(*terraform.State) error {
+						settings := sentSettings(http.MethodPut, "/v1/cost-reports/"+costReportOnlyID(t, api))
+						if settings["unitCostCalculation"] != "perUnit" || settings["unitCostScale"] != float64(1000) {
+							return fmt.Errorf("update settings = %v, want per unit per thousand", settings)
+						}
+						return nil
+					},
+				),
+			},
+			{Config: perThousand, PlanOnly: true},
+		},
+	})
+}
+
+// The API keeps the calculation and scale an update naming the metric leaves out, so a configuration
+// that does not name them sends neither and adopts the report's own, here a margin set in the app;
+// settings without the metric return both to per unit, per 1.
+func TestCostReportUnitCostCalculationLeftOutKeepsTheReportsOwn(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	costReportFake(api)
+	perCustomer := func(title string) string {
+		return costReportConfig(api, fmt.Sprintf("  title    = %q\n  settings = { unit_cost_metric_id = %q }\n",
+			title, "bmt_0000000000000000000001"))
+	}
+	sentNeither := func(method, path string) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			request := api.LastRequest(method, path)
+			settings, _ := request.Body["settings"].(map[string]any)
+			for _, k := range []string{"unitCostCalculation", "unitCostScale"} {
+				if _, sent := settings[k]; sent {
+					return fmt.Errorf("sent %s the configuration does not name: %s", k, request.Raw)
+				}
+			}
+			return nil
+		}
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: perCustomer("Per customer"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "settings.unit_cost_calculation", "perUnit"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "settings.unit_cost_scale", "1"),
+					sentNeither(http.MethodPost, "/v1/cost-reports"),
+				),
+			},
+			{
+				PreConfig: func() {
+					api.Update("/v1/cost-reports", costReportOnlyID(t, api), func(obj map[string]any) {
+						obj["settings"].(map[string]any)["unitCostCalculation"] = "grossMargin"
+					})
+				},
+				Config: perCustomer("Margin"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "title", "Margin"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "settings.unit_cost_calculation", "grossMargin"),
+					func(s *terraform.State) error {
+						return sentNeither(http.MethodPut, "/v1/cost-reports/"+costReportOnlyID(t, api))(s)
+					},
+				),
+			},
+			{Config: perCustomer("Margin"), PlanOnly: true},
+			{
+				Config: costReportConfig(api, "  title    = \"Cost\"\n  settings = { amortize = false }\n"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("costfluent_cost_report.r", "settings.unit_cost_metric_id"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "settings.unit_cost_calculation", "perUnit"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "settings.unit_cost_scale", "1"),
+				),
+			},
+		},
+	})
+}
+
+func TestCostReportRefusesAnUnknownUnitCostCalculationOrScale(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	costReportFake(api)
+	withSetting := func(setting string) string {
+		return costReportConfig(api, fmt.Sprintf("  title    = \"Per customer\"\n  settings = {\n"+
+			"    unit_cost_metric_id = \"bmt_0000000000000000000001\"\n    %s\n  }\n", setting))
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config:      withSetting(`unit_cost_calculation = "margin"`),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`value must be one of`),
+			},
+			{
+				Config:      withSetting(`unit_cost_scale = 10`),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`value must be one of`),
 			},
 		},
 	})

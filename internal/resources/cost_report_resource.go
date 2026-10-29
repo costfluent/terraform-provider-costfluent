@@ -8,6 +8,7 @@ import (
 	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -45,6 +46,7 @@ type CostReportResourceModel struct {
 	Title        types.String `tfsdk:"title"`
 	FolderID     types.String `tfsdk:"folder_id"`
 	ChartType    types.String `tfsdk:"chart_type"`
+	ChartAxis    types.String `tfsdk:"chart_axis"`
 	DateBin      types.String `tfsdk:"date_bin"`
 	DateInterval types.String `tfsdk:"date_interval"`
 	StartDate    types.String `tfsdk:"start_date"`
@@ -76,6 +78,8 @@ type CostReportSettingsModel struct {
 	Measure             types.String `tfsdk:"measure"`
 	UnitCostMetricID    types.String `tfsdk:"unit_cost_metric_id"`
 	UnitCostLabelFilter types.List   `tfsdk:"unit_cost_label_filter"`
+	UnitCostCalculation types.String `tfsdk:"unit_cost_calculation"`
+	UnitCostScale       types.Int64  `tfsdk:"unit_cost_scale"`
 }
 
 type CostReportUnitCostLabelModel struct {
@@ -136,6 +140,15 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Optional:    true,
 				Computed:    true,
 				Description: "How the report is drawn.",
+			},
+			// Computed so a report whose axis the app set does not drift, and so an update that
+			// leaves it out lets the API keep the axis or draw by date where the new chart cannot.
+			"chart_axis": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Description: "What the chart sets along its horizontal axis: `date`, or `group`, the report's grouping, " +
+					"which a `bar` or `stackedBar` chart of a grouped report in a bin other than `cumulative` draws. " +
+					"Left out, the report keeps its axis while its chart can draw it and draws by date otherwise.",
 			},
 			"date_bin": schema.StringAttribute{
 				Optional:    true,
@@ -237,18 +250,19 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					},
 					"unit_cost_metric_id": schema.StringAttribute{
 						Optional: true,
-						Description: "A `costfluent_business_metric` of the report's workspace to chart cost per unit of: " +
-							"each bin's cost over the metric's amount in that bin. Needs the `cost` measure and a date bin " +
-							"other than `Cumulative`. Unset charts cost alone.",
+						Description: "A `costfluent_business_metric` of the report's workspace to chart beside the report, " +
+							"bin by bin, as `unit_cost_calculation` says. Needs a date bin other than `Cumulative` and a " +
+							"measure the calculation charts. Unset charts the measure alone and returns the calculation " +
+							"and scale to `perUnit` and `1`.",
 						Validators: []validator.String{
 							validators.TokenPrefix("bmt_"),
 						},
 					},
 					"unit_cost_label_filter": schema.ListNestedAttribute{
 						Optional: true,
-						Description: "Which of the unit cost metric's values the cost is divided by: a value counts when " +
+						Description: "Which of the unit cost metric's values the report counts: a value counts when " +
 							"its label in every listed column is one of that column's values. Each `key` is a label " +
-							"column of the metric, listed once. Needs `unit_cost_metric_id`; unset divides by every value.",
+							"column of the metric, listed once. Needs `unit_cost_metric_id`; unset counts every value.",
 						Validators: []validator.List{
 							listvalidator.SizeAtLeast(1),
 						},
@@ -267,6 +281,30 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 									},
 								},
 							},
+						},
+					},
+					// Computed because the API keeps the calculation and scale an update naming the metric
+					// leaves out: an unset one is not sent, so a margin set in the app is not reset to per unit.
+					"unit_cost_calculation": schema.StringAttribute{
+						Optional: true,
+						Computed: true,
+						Description: "How the unit cost metric is charted: `perUnit`, each bin's cost or usage over the " +
+							"metric's amount; `grossMargin`, revenue less cost over revenue as a fraction, on the `cost` " +
+							"measure and a metric whose unit is the report's currency code; or `metricValue`, the metric's " +
+							"own amount, on any measure. Needs `unit_cost_metric_id`. Left out, a new report charts " +
+							"`perUnit` and an update keeps the report's own.",
+						Validators: []validator.String{
+							stringvalidator.OneOf(costfluent.UnitCostPerUnit, costfluent.UnitCostGrossMargin, costfluent.UnitCostMetricValue),
+						},
+					},
+					"unit_cost_scale": schema.Int64Attribute{
+						Optional: true,
+						Computed: true,
+						Description: "How many units of the metric a `perUnit` figure is charted per: `1`, `100`, `1000`, " +
+							"`1000000` or `1000000000`. Other than `1` only with `perUnit` and `unit_cost_metric_id`. " +
+							"Left out, a new report charts per `1` and an update keeps the report's own.",
+						Validators: []validator.Int64{
+							int64validator.OneOf(1, 100, 1_000, 1_000_000, 1_000_000_000),
 						},
 					},
 				},
@@ -298,6 +336,7 @@ func (r *CostReportResource) Create(ctx context.Context, req resource.CreateRequ
 	applyCostReportOptionals(ctx, &plan, &resp.Diagnostics, func(o costReportOptionals) {
 		input.FolderID = o.FolderID
 		input.ChartType = o.ChartType
+		input.ChartAxis = o.ChartAxis
 		input.DateBin = o.DateBin
 		input.DateInterval = o.DateInterval
 		input.StartDate = o.StartDate
@@ -363,6 +402,7 @@ func (r *CostReportResource) Update(ctx context.Context, req resource.UpdateRequ
 	applyCostReportOptionals(ctx, &plan, &resp.Diagnostics, func(o costReportOptionals) {
 		input.FolderID = o.FolderID
 		input.ChartType = o.ChartType
+		input.ChartAxis = o.ChartAxis
 		input.DateBin = o.DateBin
 		input.DateInterval = o.DateInterval
 		input.StartDate = o.StartDate
@@ -523,6 +563,8 @@ func upgradeCostReportStateV0(ctx context.Context, req resource.UpgradeStateRequ
 		attrs["measure"] = types.StringNull()
 		attrs["unit_cost_metric_id"] = types.StringNull()
 		attrs["unit_cost_label_filter"] = types.ListNull(types.ObjectType{AttrTypes: costReportUnitCostLabelAttrTypes})
+		attrs["unit_cost_calculation"] = types.StringNull()
+		attrs["unit_cost_scale"] = types.Int64Null()
 		settings, diags = types.ObjectValue(costReportSettingsAttrTypes, attrs)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
@@ -536,6 +578,7 @@ func upgradeCostReportStateV0(ctx context.Context, req resource.UpgradeStateRequ
 		Title:        prior.Title,
 		FolderID:     prior.FolderID,
 		ChartType:    prior.ChartType,
+		ChartAxis:    types.StringNull(),
 		DateBin:      prior.DateBin,
 		DateInterval: prior.DateInterval,
 		StartDate:    prior.StartDate,
@@ -563,6 +606,7 @@ func parseV0Grouping(value string) costfluent.Grouping {
 type costReportOptionals struct {
 	FolderID     *string
 	ChartType    *string
+	ChartAxis    *string
 	DateBin      *string
 	DateInterval *string
 	StartDate    *string
@@ -581,6 +625,7 @@ func applyCostReportOptionals(
 	optionals := costReportOptionals{
 		FolderID:     stringPointer(plan.FolderID),
 		ChartType:    stringPointer(plan.ChartType),
+		ChartAxis:    stringPointer(plan.ChartAxis),
 		DateBin:      stringPointer(plan.DateBin),
 		DateInterval: stringPointer(plan.DateInterval),
 		StartDate:    stringPointer(plan.StartDate),
@@ -619,6 +664,8 @@ func applyCostReportOptionals(
 			Measure:             settings.Measure.ValueString(),
 			UnitCostMetricID:    knownString(settings.UnitCostMetricID),
 			UnitCostLabelFilter: unitCostLabelFilter(ctx, settings.UnitCostLabelFilter, diags),
+			UnitCostCalculation: settings.UnitCostCalculation.ValueString(),
+			UnitCostScale:       knownInt(settings.UnitCostScale),
 		}
 	}
 
@@ -648,6 +695,7 @@ func mapCostReportToModel(
 	model.ID = types.StringValue(report.ID)
 	model.Title = types.StringValue(report.Title)
 	model.ChartType = sameEnum(model.ChartType, report.ChartType)
+	model.ChartAxis = sameEnum(model.ChartAxis, report.ChartAxis)
 	model.DateBin = sameEnum(model.DateBin, report.DateBin)
 	model.DateInterval = sameEnum(model.DateInterval, report.DateInterval)
 
@@ -681,6 +729,8 @@ func mapCostReportToModel(
 		Measure:             types.StringValue(report.Settings.Measure),
 		UnitCostMetricID:    types.StringPointerValue(report.Settings.UnitCostMetricID),
 		UnitCostLabelFilter: unitCostLabelList(ctx, report.Settings.UnitCostLabelFilter, &diags),
+		UnitCostCalculation: types.StringValue(report.Settings.UnitCostCalculation),
+		UnitCostScale:       types.Int64Value(int64(report.Settings.UnitCostScale)),
 	})
 	diags.Append(settingDiags...)
 	model.Settings = settings
@@ -769,6 +819,15 @@ func knownString(value types.String) *string {
 	return value.ValueStringPointer()
 }
 
+// knownInt is knownString for a whole number.
+func knownInt(value types.Int64) *int {
+	if value.IsNull() || value.IsUnknown() {
+		return nil
+	}
+	v := int(value.ValueInt64())
+	return &v
+}
+
 var costReportSettingsAttrTypes = map[string]attr.Type{
 	"amortize":               types.BoolType,
 	"include_credits":        types.BoolType,
@@ -779,4 +838,6 @@ var costReportSettingsAttrTypes = map[string]attr.Type{
 	"measure":                types.StringType,
 	"unit_cost_metric_id":    types.StringType,
 	"unit_cost_label_filter": types.ListType{ElemType: types.ObjectType{AttrTypes: costReportUnitCostLabelAttrTypes}},
+	"unit_cost_calculation":  types.StringType,
+	"unit_cost_scale":        types.Int64Type,
 }

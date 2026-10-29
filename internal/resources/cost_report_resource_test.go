@@ -97,25 +97,29 @@ func TestGroupingListKeepsConfiguredCase(t *testing.T) {
 func TestMapCostReportKeepsConfiguredEnumCase(t *testing.T) {
 	t.Parallel()
 	report := &costfluent.CostReport{
-		ID: "cr_1", Title: "Compute", ChartType: "stackedBar", DateBin: "week", DateInterval: "last7Days",
+		ID: "cr_1", Title: "Compute", ChartType: "stackedBar", ChartAxis: "group", DateBin: "week",
+		DateInterval: "last7Days",
 	}
 
 	configured := CostReportResourceModel{
 		ChartType:    types.StringValue("StackedBar"),
-		DateBin:      types.StringValue("week"),
+		ChartAxis:    types.StringValue("GROUP"),
+		DateBin:      types.StringValue("Week"),
 		DateInterval: types.StringValue("LAST7DAYS"),
 		GroupBy:      types.ListNull(groupingObject),
 	}
 	if diags := mapCostReportToModel(context.Background(), nil, report, &configured); diags.HasError() {
 		t.Fatal(diags)
 	}
-	if configured.ChartType.ValueString() != "StackedBar" || configured.DateBin.ValueString() != "week" ||
-		configured.DateInterval.ValueString() != "LAST7DAYS" {
-		t.Fatalf("configured spelling lost: %s %s %s", configured.ChartType, configured.DateBin, configured.DateInterval)
+	if configured.ChartType.ValueString() != "StackedBar" || configured.ChartAxis.ValueString() != "GROUP" ||
+		configured.DateBin.ValueString() != "Week" || configured.DateInterval.ValueString() != "LAST7DAYS" {
+		t.Fatalf("configured spelling lost: %s %s %s %s",
+			configured.ChartType, configured.ChartAxis, configured.DateBin, configured.DateInterval)
 	}
 
 	imported := CostReportResourceModel{
 		ChartType:    types.StringNull(),
+		ChartAxis:    types.StringNull(),
 		DateBin:      types.StringNull(),
 		DateInterval: types.StringNull(),
 		GroupBy:      types.ListNull(groupingObject),
@@ -123,13 +127,15 @@ func TestMapCostReportKeepsConfiguredEnumCase(t *testing.T) {
 	if diags := mapCostReportToModel(context.Background(), nil, report, &imported); diags.HasError() {
 		t.Fatal(diags)
 	}
-	if imported.ChartType.ValueString() != "stackedBar" || imported.DateBin.ValueString() != "week" ||
-		imported.DateInterval.ValueString() != "last7Days" {
-		t.Fatalf("import %s %s %s, want the API's values", imported.ChartType, imported.DateBin, imported.DateInterval)
+	if imported.ChartType.ValueString() != "stackedBar" || imported.ChartAxis.ValueString() != "group" ||
+		imported.DateBin.ValueString() != "week" || imported.DateInterval.ValueString() != "last7Days" {
+		t.Fatalf("import %s %s %s %s, want the API's values",
+			imported.ChartType, imported.ChartAxis, imported.DateBin, imported.DateInterval)
 	}
 
 	drifted := CostReportResourceModel{
 		ChartType:    types.StringValue("bar"),
+		ChartAxis:    types.StringValue("date"),
 		DateBin:      types.StringValue("Day"),
 		DateInterval: types.StringValue("thisMonth"),
 		GroupBy:      types.ListNull(groupingObject),
@@ -137,9 +143,9 @@ func TestMapCostReportKeepsConfiguredEnumCase(t *testing.T) {
 	if diags := mapCostReportToModel(context.Background(), nil, report, &drifted); diags.HasError() {
 		t.Fatal(diags)
 	}
-	if drifted.ChartType.ValueString() != "stackedBar" || drifted.DateBin.ValueString() != "week" ||
-		drifted.DateInterval.ValueString() != "last7Days" {
-		t.Fatalf("drift masked: %s %s %s", drifted.ChartType, drifted.DateBin, drifted.DateInterval)
+	if drifted.ChartType.ValueString() != "stackedBar" || drifted.ChartAxis.ValueString() != "group" ||
+		drifted.DateBin.ValueString() != "week" || drifted.DateInterval.ValueString() != "last7Days" {
+		t.Fatalf("drift masked: %s %s %s %s", drifted.ChartType, drifted.ChartAxis, drifted.DateBin, drifted.DateInterval)
 	}
 }
 

@@ -14,8 +14,8 @@ variable "azure_client_secret" {
 # The role must trust data.costfluent_aws_provider_info's principal_arn with its external_id;
 # Costfluent adds the external ID itself, so the credentials carry only the role.
 resource "costfluent_provider" "aws_main" {
-  key  = "aws"
-  name = "AWS Production"
+  key          = "aws"
+  display_name = "AWS Production"
   credentials = {
     role_arn = "arn:aws:iam::123456789012:role/CostfluentBillingRole"
   }
@@ -26,8 +26,8 @@ resource "costfluent_provider" "aws_main" {
 }
 
 resource "costfluent_provider" "azure" {
-  key  = "azure"
-  name = "Azure Production"
+  key          = "azure"
+  display_name = "Azure Production"
   credentials = {
     tenant   = var.azure_tenant_id
     appId    = var.azure_client_id

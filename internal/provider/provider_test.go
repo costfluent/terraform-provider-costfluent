@@ -382,7 +382,7 @@ func TestProviderRegistersEveryResourceAndDataSource(t *testing.T) {
 		"costfluent_business_metric", "costfluent_cost_alert",
 		"costfluent_cost_report", "costfluent_cost_report_subscription", "costfluent_dashboard",
 		"costfluent_dashboard_widget", "costfluent_folder", "costfluent_gcp_service_account", "costfluent_provider",
-		"costfluent_saved_filter", "costfluent_segment", "costfluent_tag_policy", "costfluent_team", "costfluent_team_member",
+		"costfluent_saved_filter", "costfluent_savings_view", "costfluent_segment", "costfluent_tag_policy", "costfluent_team", "costfluent_team_member",
 		"costfluent_team_workspace_access",
 		"costfluent_virtual_tag", "costfluent_workspace", "costfluent_workspace_provider",
 	}
@@ -398,9 +398,9 @@ func TestProviderRegistersEveryResourceAndDataSource(t *testing.T) {
 	}
 	slices.Sort(dataSources)
 	wantDataSources := []string{
-		"costfluent_anomalies", "costfluent_aws_provider_info", "costfluent_cost_data", "costfluent_cost_summary",
-		"costfluent_entitlement", "costfluent_provider", "costfluent_providers", "costfluent_user",
-		"costfluent_workspace", "costfluent_workspaces",
+		"costfluent_anomalies", "costfluent_aws_provider_info", "costfluent_commitments", "costfluent_cost_data",
+		"costfluent_cost_summary", "costfluent_entitlement", "costfluent_provider", "costfluent_providers",
+		"costfluent_savings_items", "costfluent_user", "costfluent_workspace", "costfluent_workspaces",
 	}
 	if !slices.Equal(dataSources, wantDataSources) {
 		t.Fatalf("data sources = %v, want %v", dataSources, wantDataSources)

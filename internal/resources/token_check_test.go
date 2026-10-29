@@ -184,15 +184,16 @@ func TestTokenCheckChecksAReplacementAgainstDeleteAndCreate(t *testing.T) {
 	t.Parallel()
 	api := fakeapi.New(t)
 	fakeBudgets(api)
-	alert := func(percent int) string { return fmt.Sprintf("  alerts = [{ threshold_percent = %d }]\n", percent) }
+	// A new cadence replaces a budget.
+	cadence := func(count int) string { return fmt.Sprintf("  interval_count = %d\n", count) }
 
 	tfresource.UnitTest(t, tfresource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		Steps: []tfresource.TestStep{
-			{Config: budgetConfig(api, "Platform", "500", alert(75))},
+			{Config: budgetConfig(api, "Platform", "500", cadence(1))},
 			{
 				PreConfig: func() { api.Me(without(costfluent.CapabilityUpdateBudget)) },
-				Config:    budgetConfig(api, "Platform", "500", alert(80)),
+				Config:    budgetConfig(api, "Platform", "500", cadence(2)),
 				Check: func(*terraform.State) error {
 					if got := api.Requests(http.MethodDelete, ""); len(got) != 1 {
 						return fmt.Errorf("deletes = %+v, want the replaced budget's", got)
@@ -202,12 +203,12 @@ func TestTokenCheckChecksAReplacementAgainstDeleteAndCreate(t *testing.T) {
 			},
 			{
 				PreConfig:   func() { api.Me(without(costfluent.CapabilityDeleteBudget)) },
-				Config:      budgetConfig(api, "Platform", "500", alert(90)),
+				Config:      budgetConfig(api, "Platform", "500", cadence(3)),
 				ExpectError: refusal("costfluent_budget", "replacing", costfluent.CapabilityDeleteBudget),
 			},
 			{
 				PreConfig:   func() { api.Me(without(costfluent.CapabilityCreateBudget)) },
-				Config:      budgetConfig(api, "Platform", "500", alert(90)),
+				Config:      budgetConfig(api, "Platform", "500", cadence(3)),
 				ExpectError: refusal("costfluent_budget", "replacing", costfluent.CapabilityCreateBudget),
 			},
 			{
@@ -217,7 +218,7 @@ func TestTokenCheckChecksAReplacementAgainstDeleteAndCreate(t *testing.T) {
 					}
 					api.Me(without())
 				},
-				Config:   budgetConfig(api, "Platform", "500", alert(80)),
+				Config:   budgetConfig(api, "Platform", "500", cadence(2)),
 				PlanOnly: true,
 			},
 		},
@@ -290,6 +291,9 @@ func TestTokenCheckRequiresTheConditionalCallsThePlanSends(t *testing.T) {
 		{"costfluent_saved_filter", func(api *fakeapi.Server) string {
 			return savedFilterConfig(api, "EC2", "")
 		}, costfluent.CapabilityViewCosts},
+		{"costfluent_team_workspace_access", func(api *fakeapi.Server) string {
+			return teamDefaultDashboardConfig(api, "canView", "dsh_0000000000000000000001")
+		}, costfluent.CapabilityViewDashboards},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -309,6 +313,18 @@ func TestTokenCheckRequiresTheConditionalCallsThePlanSends(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("costfluent_team_workspace_access without a default dashboard", func(t *testing.T) {
+		t.Parallel()
+		api := fakeapi.New(t)
+		teamFake(api)
+		api.Me(without(costfluent.CapabilityViewDashboards))
+
+		tfresource.UnitTest(t, tfresource.TestCase{
+			ProtoV6ProviderFactories: factories,
+			Steps:                    []tfresource.TestStep{{Config: teamDefaultDashboardConfig(api, "canView", "")}},
+		})
+	})
 
 	t.Run("costfluent_dashboard without a saved filter", func(t *testing.T) {
 		t.Parallel()

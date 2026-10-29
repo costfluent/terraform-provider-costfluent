@@ -49,6 +49,22 @@ type AnomalyModel struct {
 	Status           types.String  `tfsdk:"status"`
 	IsAcknowledged   types.Bool    `tfsdk:"is_acknowledged"`
 	DetectedAt       types.String  `tfsdk:"detected_at"`
+
+	AttributedResourceID types.String                 `tfsdk:"attributed_resource_id"`
+	Contributors         []AnomalyContributorModel    `tfsdk:"contributors"`
+	AttributedSku        types.String                 `tfsdk:"attributed_sku"`
+	SkuContributors      []AnomalySkuContributorModel `tfsdk:"sku_contributors"`
+}
+
+type AnomalyContributorModel struct {
+	AccountID  types.String `tfsdk:"account_id"`
+	ResourceID types.String `tfsdk:"resource_id"`
+	Increase   types.String `tfsdk:"increase"`
+}
+
+type AnomalySkuContributorModel struct {
+	Sku      types.String `tfsdk:"sku"`
+	Increase types.String `tfsdk:"increase"`
 }
 
 func NewAnomaliesDataSource() datasource.DataSource {
@@ -101,8 +117,8 @@ func (d *AnomaliesDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 						"provider_id":  computed("Provider the anomaly was found in."),
 						"anomaly_date": computed("Day the cost departed from what was expected."),
 						"service_name": computed("Service whose cost departed."),
-						"region":       computed("Region, when the anomaly is regional."),
-						"anomaly_type": computed("Anomaly type."),
+						"region":       computed("The region with more than half the increase; null when no one region holds most of it. For new_spend, the new region with more than half the new spend."),
+						"anomaly_type": computed("Anomaly type: spike, a day well above its 30-day baseline, or new_spend, a service or a region of one first billed within the seven days up to the anomaly date after none in the 95 days before it. Read any other value as an anomaly."),
 						"severity":     computed("Severity level."),
 						"expected_cost": schema.StringAttribute{
 							Computed:    true,
@@ -122,7 +138,30 @@ func (d *AnomaliesDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 							Computed:    true,
 							Description: "Whether the anomaly was acknowledged.",
 						},
-						"detected_at": computed("Detection timestamp."),
+						"detected_at":            computed("Detection timestamp."),
+						"attributed_resource_id": computed("The resource with more than half the increase; null when no one resource holds most of it."),
+						"contributors": schema.ListNestedAttribute{
+							Computed:    true,
+							Description: "The resources that added most to the increase, largest first, at most three.",
+							NestedObject: schema.NestedAttributeObject{
+								Attributes: map[string]schema.Attribute{
+									"account_id":  computed("Account the resource is billed to; null when the provider names none."),
+									"resource_id": computed("Resource ID."),
+									"increase":    computed("The resource's part of the increase, in the anomaly's currency."),
+								},
+							},
+						},
+						"attributed_sku": computed("The SKU with more than half the increase, named as a cost report's SKU grouping names it; null when no one SKU holds most of it."),
+						"sku_contributors": schema.ListNestedAttribute{
+							Computed:    true,
+							Description: "The SKUs that added most to the increase, largest first, at most three.",
+							NestedObject: schema.NestedAttributeObject{
+								Attributes: map[string]schema.Attribute{
+									"sku":      computed("The provider's SKU label, such as an AWS usage type, or its SKU ID when it has none."),
+									"increase": computed("The SKU's part of the increase, in the anomaly's currency."),
+								},
+							},
+						},
 					},
 				},
 			},
@@ -180,6 +219,24 @@ func (d *AnomaliesDataSource) Read(ctx context.Context, req datasource.ReadReque
 			Status:           types.StringValue(a.Status),
 			IsAcknowledged:   types.BoolValue(a.IsAcknowledged),
 			DetectedAt:       types.StringValue(a.DetectedAt.Format(time.RFC3339)),
+
+			AttributedResourceID: types.StringPointerValue(a.AttributedResourceID),
+			Contributors:         make([]AnomalyContributorModel, len(a.Contributors)),
+			AttributedSku:        types.StringPointerValue(a.AttributedSku),
+			SkuContributors:      make([]AnomalySkuContributorModel, len(a.SkuContributors)),
+		}
+		for j, c := range a.Contributors {
+			config.Anomalies[i].Contributors[j] = AnomalyContributorModel{
+				AccountID:  types.StringPointerValue(c.AccountID),
+				ResourceID: types.StringValue(c.ResourceID),
+				Increase:   decimalValue(c.Increase),
+			}
+		}
+		for j, s := range a.SkuContributors {
+			config.Anomalies[i].SkuContributors[j] = AnomalySkuContributorModel{
+				Sku:      types.StringValue(s.Sku),
+				Increase: decimalValue(s.Increase),
+			}
 		}
 	}
 

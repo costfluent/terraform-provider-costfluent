@@ -19,7 +19,7 @@ func storedBudget(thresholds ...int) *costfluent.Budget {
 		},
 		CreatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 	for _, t := range thresholds {
-		b.Alerts = append(b.Alerts, costfluent.BudgetAlert{ThresholdPercent: t})
+		b.Alerts = append(b.Alerts, costfluent.BudgetAlert{ThresholdPercent: t, Basis: costfluent.BudgetAlertBasisActual})
 	}
 	return b
 }
@@ -28,8 +28,10 @@ func alertList(t *testing.T, thresholds ...int64) types.List {
 	t.Helper()
 	values := make([]attr.Value, 0, len(thresholds))
 	for _, threshold := range thresholds {
-		values = append(values, types.ObjectValueMust(budgetAlertAttrTypes,
-			map[string]attr.Value{"threshold_percent": types.Int64Value(threshold)}))
+		values = append(values, types.ObjectValueMust(budgetAlertAttrTypes, map[string]attr.Value{
+			"threshold_percent": types.Int64Value(threshold),
+			"basis":             types.StringValue(costfluent.BudgetAlertBasisActual),
+		}))
 	}
 	return types.ListValueMust(types.ObjectType{AttrTypes: budgetAlertAttrTypes}, values)
 }

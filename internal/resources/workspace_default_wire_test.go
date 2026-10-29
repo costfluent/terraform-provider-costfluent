@@ -80,6 +80,13 @@ func workspaceDefaultedResources() []workspaceDefaulted {
 			new:    resources.NewSavedFilterResource, edit: "title", value: "EC2 renamed",
 		},
 		{
+			address: "costfluent_savings_view.v", fake: savingsViewFake,
+			config: func(api *fakeapi.Server) string { return savingsViewConfig(api, "Idle", "") },
+			ids:    collection(savingsViewPath), importID: bare,
+			edited: func(api *fakeapi.Server) string { return savingsViewConfig(api, "Idle renamed", "") },
+			new:    resources.NewSavingsViewResource, edit: "title", value: "Idle renamed",
+		},
+		{
 			address: "costfluent_virtual_tag.t", fake: virtualTagFake,
 			config: func(api *fakeapi.Server) string { return virtualTagConfig(api, "") },
 			ids:    collection("/v1/virtual-tags"), importID: bare,

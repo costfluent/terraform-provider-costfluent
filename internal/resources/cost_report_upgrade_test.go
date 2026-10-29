@@ -131,6 +131,28 @@ func TestCostReportUpgradeState_v0TagGroupingKeepsItsKey(t *testing.T) {
 	}
 }
 
+// v0.2.1 predates the chart axis: the upgrade leaves it null for the next read to fill in.
+func TestCostReportUpgradeState_v0LeavesTheChartAxisToTheNextRead(t *testing.T) {
+	t.Parallel()
+	_, server, upgraded := upgradeCostReportState(t, v021CostReportState("ServiceName"))
+
+	schemas, err := server.GetProviderSchema(context.Background(), &tfprotov6.GetProviderSchemaRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := upgraded.UpgradedState.Unmarshal(schemas.ResourceSchemas["costfluent_cost_report"].ValueType())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attrs map[string]tftypes.Value
+	if err := value.As(&attrs); err != nil {
+		t.Fatal(err)
+	}
+	if axis := attrs["chart_axis"]; !axis.IsNull() {
+		t.Fatalf("chart_axis = %v, want null", axis)
+	}
+}
+
 func TestCostReportUpgradeState_v0GroupByNullBecomesNoSlots(t *testing.T) {
 	t.Parallel()
 	slots := upgradeCostReport(t, v021CostReportState(nil))

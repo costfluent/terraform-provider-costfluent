@@ -89,7 +89,7 @@ func (r *AppResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 					"email (one address, or several separated by commas), webhookUrl for Slack and Teams, url and an " +
 					"optional signing secret for a webhook, which must be public HTTPS, with its optional events: the " +
 					"state changes it is sent (savings_item_status, provider_health, spend_band, subscription_status, " +
-					"anomaly_status). A null or empty secret counts " +
+					"anomaly_status, connection_imported). A null or empty secret counts " +
 					"as none. Removing a secret the config named, or setting it to null or empty, removes the " +
 					"webhook's signing; a webhook whose config never named one keeps the secret Costfluent " +
 					"generated. The API never returns the credentials in it, and returns a webhook's url as its " +

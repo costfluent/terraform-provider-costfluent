@@ -19,10 +19,11 @@ import (
 )
 
 var (
-	_ resource.Resource                = &TeamWorkspaceAccessResource{}
-	_ resource.ResourceWithConfigure   = &TeamWorkspaceAccessResource{}
-	_ resource.ResourceWithModifyPlan  = &TeamWorkspaceAccessResource{}
-	_ resource.ResourceWithImportState = &TeamWorkspaceAccessResource{}
+	_ resource.Resource                   = &TeamWorkspaceAccessResource{}
+	_ resource.ResourceWithConfigure      = &TeamWorkspaceAccessResource{}
+	_ resource.ResourceWithModifyPlan     = &TeamWorkspaceAccessResource{}
+	_ resource.ResourceWithImportState    = &TeamWorkspaceAccessResource{}
+	_ resource.ResourceWithValidateConfig = &TeamWorkspaceAccessResource{}
 )
 
 // teamWorkspaceAccessLevels are the API's WorkspaceAccessLevel names.
@@ -37,6 +38,8 @@ type TeamWorkspaceAccessResourceModel struct {
 	TeamID      types.String `tfsdk:"team_id"`
 	WorkspaceID types.String `tfsdk:"workspace_id"`
 	AccessLevel types.String `tfsdk:"access_level"`
+	// DefaultDashboardID is set through its own call after the access level, which keeps it.
+	DefaultDashboardID types.String `tfsdk:"default_dashboard_id"`
 }
 
 func NewTeamWorkspaceAccessResource() resource.Resource {
@@ -46,6 +49,10 @@ func NewTeamWorkspaceAccessResource() resource.Resource {
 		Read:         []costfluent.Capability{costfluent.CapabilityViewMembers},
 		Update:       []costfluent.Capability{costfluent.CapabilityManageWorkspaceAccess},
 		Delete:       []costfluent.Capability{costfluent.CapabilityManageWorkspaceAccess},
+		Conditional: []Conditional{
+			{Capability: costfluent.CapabilityManageWorkspaceAccess, Sent: sentWhenSet(path.Root("default_dashboard_id"))},
+			{Capability: costfluent.CapabilityViewDashboards, Sent: sentWhenSet(path.Root("default_dashboard_id"))},
+		},
 	}}}
 }
 
@@ -88,6 +95,16 @@ func (r *TeamWorkspaceAccessResource) Schema(_ context.Context, _ resource.Schem
 					stringvalidator.OneOf(teamWorkspaceAccessLevels...),
 				},
 			},
+			"default_dashboard_id": schema.StringAttribute{
+				Optional: true,
+				Description: "ID of a dashboard in the workspace that the team's members open after signing in, " +
+					"unless they chose their own; not allowed with noAccess. Remove it to clear the default. Setting " +
+					"or clearing it also needs `viewDashboards`. Changing the team's default in the console shows as " +
+					"drift, which the next apply sets back; deleting the dashboard clears the default.",
+				Validators: []validator.String{
+					validators.TokenPrefix("dsh_"),
+				},
+			},
 		},
 	}
 }
@@ -99,12 +116,23 @@ func (r *TeamWorkspaceAccessResource) Create(ctx context.Context, req resource.C
 		return
 	}
 
-	if err := r.set(ctx, plan); err != nil {
+	if err := r.setLevel(ctx, plan); err != nil {
 		apidiag.AddError(&resp.Diagnostics, "Failed to set team workspace access", err)
 		return
 	}
-
 	plan.ID = types.StringValue(plan.TeamID.ValueString() + ":" + plan.WorkspaceID.ValueString())
+
+	// The grant exists from here, so a failure to set the default still records it, without one: the
+	// next apply sets the default.
+	if !plan.DefaultDashboardID.IsNull() {
+		if err := r.setDefaultDashboard(ctx, &plan); err != nil {
+			plan.DefaultDashboardID = types.StringNull()
+			resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+			apidiag.AddError(&resp.Diagnostics, "Failed to set the team's default dashboard", err)
+			return
+		}
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -128,6 +156,7 @@ func (r *TeamWorkspaceAccessResource) Read(ctx context.Context, req resource.Rea
 	for _, grant := range grants {
 		if grant.WorkspaceID == state.WorkspaceID.ValueString() {
 			state.AccessLevel = types.StringValue(grant.AccessLevel)
+			state.DefaultDashboardID = types.StringPointerValue(grant.DefaultDashboardID)
 			state.ID = types.StringValue(state.TeamID.ValueString() + ":" + grant.WorkspaceID)
 			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 			return
@@ -137,15 +166,30 @@ func (r *TeamWorkspaceAccessResource) Read(ctx context.Context, req resource.Rea
 }
 
 func (r *TeamWorkspaceAccessResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan TeamWorkspaceAccessResourceModel
+	var plan, state TeamWorkspaceAccessResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	if err := r.set(ctx, plan); err != nil {
-		apidiag.AddError(&resp.Diagnostics, "Failed to set team workspace access", err)
-		return
+	// The level goes first: a grant leaving noAccess can then take a default, and one moving to
+	// noAccess can still have its default cleared.
+	if !plan.AccessLevel.Equal(state.AccessLevel) {
+		if err := r.setLevel(ctx, plan); err != nil {
+			apidiag.AddError(&resp.Diagnostics, "Failed to set team workspace access", err)
+			return
+		}
+	}
+
+	if !plan.DefaultDashboardID.Equal(state.DefaultDashboardID) {
+		if err := r.setDefaultDashboard(ctx, &plan); err != nil {
+			// The level may already be written, so it is recorded with the default it replaced.
+			plan.DefaultDashboardID = state.DefaultDashboardID
+			resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+			apidiag.AddError(&resp.Diagnostics, "Failed to set the team's default dashboard", err)
+			return
+		}
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
@@ -179,7 +223,33 @@ func (r *TeamWorkspaceAccessResource) ImportState(ctx context.Context, req resou
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("workspace_id"), workspace)...)
 }
 
-func (r *TeamWorkspaceAccessResource) set(ctx context.Context, model TeamWorkspaceAccessResourceModel) error {
+// ValidateConfig refuses a default dashboard on a noAccess grant, which the API refuses after the
+// grant is already written.
+func (r *TeamWorkspaceAccessResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config TeamWorkspaceAccessResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() || config.DefaultDashboardID.IsNull() || config.AccessLevel.IsUnknown() {
+		return
+	}
+	if config.AccessLevel.ValueString() == "noAccess" {
+		resp.Diagnostics.AddAttributeError(path.Root("default_dashboard_id"), "No default dashboard without access",
+			"A team with noAccess on the workspace has no default dashboard there: remove default_dashboard_id or grant canView or canEdit.")
+	}
+}
+
+func (r *TeamWorkspaceAccessResource) setLevel(ctx context.Context, model TeamWorkspaceAccessResourceModel) error {
 	return r.client.SetTeamWorkspaceAccess(ctx, model.TeamID.ValueString(), model.WorkspaceID.ValueString(),
 		&costfluent.SetTeamWorkspaceAccessInput{AccessLevel: model.AccessLevel.ValueString()})
+}
+
+// setDefaultDashboard sets or, when the model has none, clears the grant's default dashboard, and
+// records the one the API answers.
+func (r *TeamWorkspaceAccessResource) setDefaultDashboard(ctx context.Context, model *TeamWorkspaceAccessResourceModel) error {
+	grant, err := r.client.SetTeamDefaultDashboard(ctx, model.TeamID.ValueString(), model.WorkspaceID.ValueString(),
+		model.DefaultDashboardID.ValueStringPointer())
+	if err != nil {
+		return err
+	}
+	model.DefaultDashboardID = types.StringPointerValue(grant.DefaultDashboardID)
+	return nil
 }

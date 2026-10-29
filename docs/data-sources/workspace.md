@@ -41,6 +41,7 @@ output "workspace_currency" {
 
 ### Read-Only
 
+- `blend_commitment_discounts` (Boolean) Whether every amortized figure of this workspace spreads each day's AWS Savings Plan and Reserved Instance discount evenly across the usage it could cover.
 - `created_at` (String) Creation timestamp.
 - `currency` (String) Default currency.
 - `enable_automatic_syncing` (Boolean) Whether Costfluent collects from this workspace's data sources on its own schedule.

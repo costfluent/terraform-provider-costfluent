@@ -18,10 +18,11 @@ import (
 )
 
 var (
-	_ resource.Resource                = &ProviderResource{}
-	_ resource.ResourceWithConfigure   = &ProviderResource{}
-	_ resource.ResourceWithModifyPlan  = &ProviderResource{}
-	_ resource.ResourceWithImportState = &ProviderResource{}
+	_ resource.Resource                 = &ProviderResource{}
+	_ resource.ResourceWithConfigure    = &ProviderResource{}
+	_ resource.ResourceWithModifyPlan   = &ProviderResource{}
+	_ resource.ResourceWithImportState  = &ProviderResource{}
+	_ resource.ResourceWithUpgradeState = &ProviderResource{}
 )
 
 type ProviderResource struct {
@@ -31,7 +32,7 @@ type ProviderResource struct {
 type ProviderResourceModel struct {
 	ID                   types.String `tfsdk:"id"`
 	Key                  types.String `tfsdk:"key"`
-	Name                 types.String `tfsdk:"name"`
+	DisplayName          types.String `tfsdk:"display_name"`
 	Description          types.String `tfsdk:"description"`
 	Credentials          types.Map    `tfsdk:"credentials"`
 	Settings             types.Map    `tfsdk:"settings"`
@@ -60,6 +61,7 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 	resp.Schema = schema.Schema{
 		Description: "Manages a Costfluent provider (cloud account connection). " +
 			r.needs.sentence(),
+		Version: 1,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -78,7 +80,7 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"name": schema.StringAttribute{
+			"display_name": schema.StringAttribute{
 				Required:    true,
 				Description: "Display name for the provider. Changing it renames the connection in place; it keeps its ID and the costs it has collected.",
 			},
@@ -98,7 +100,11 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Optional:    true,
 				ElementType: types.StringType,
 				Description: "Provider-specific settings: export_bucket, export_bucket_region, export_prefix and export_name for an AWS FOCUS export, " +
-					"carbon_export_name for the AWS carbon emissions Data Export beside it, and carbon_dataset for a GCP Carbon Footprint export dataset. " +
+					"carbon_export_name for the AWS carbon emissions Data Export beside it, carbon_dataset for a GCP Carbon Footprint export dataset, " +
+					"cud_dataset for a GCP committed use discount metadata export dataset, " +
+					"and billing_scope for an Azure connection that collects a billing scope instead of its subscriptions: billingAccounts/{enrollment} " +
+					"for an Enterprise Agreement, or billingAccounts/{billing account id} or billingAccounts/{billing account id}/billingProfiles/{billing profile id} " +
+					"for a Microsoft Customer Agreement. " +
 					"Write-only: the API does not return them, so a change made outside Terraform is not detected. " +
 					"Changing them updates the provider in place, and removing or emptying them clears them.",
 			},
@@ -167,7 +173,7 @@ func (r *ProviderResource) Create(ctx context.Context, req resource.CreateReques
 	minutes := int(plan.SyncFrequencyMinutes.ValueInt64())
 	input := &costfluent.CreateProviderInput{
 		Key:                  costfluent.ProviderKey(plan.Key.ValueString()),
-		Name:                 plan.Name.ValueString(),
+		DisplayName:          plan.DisplayName.ValueString(),
 		Description:          knownString(plan.Description),
 		ParentProviderID:     knownString(plan.ParentProviderID),
 		ExternalID:           knownString(plan.ExternalID),
@@ -235,8 +241,8 @@ func (r *ProviderResource) Update(ctx context.Context, req resource.UpdateReques
 
 	input := &costfluent.UpdateProviderInput{}
 
-	if !plan.Name.Equal(state.Name) {
-		input.Name = knownString(plan.Name)
+	if !plan.DisplayName.Equal(state.DisplayName) {
+		input.DisplayName = knownString(plan.DisplayName)
 	}
 
 	if !plan.Description.Equal(state.Description) {
@@ -309,10 +315,91 @@ func (r *ProviderResource) ImportState(ctx context.Context, req resource.ImportS
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
+// UpgradeState carries state written by v0.3.x and earlier, where the display name was `name`, onto
+// `display_name`. Without it every existing connection fails to plan, refresh or destroy.
+func (r *ProviderResource) UpgradeState(_ context.Context) map[int64]resource.StateUpgrader {
+	return map[int64]resource.StateUpgrader{
+		0: {
+			PriorSchema:   providerSchemaV0(),
+			StateUpgrader: upgradeProviderStateV0,
+		},
+	}
+}
+
+type providerResourceModelV0 struct {
+	ID                   types.String `tfsdk:"id"`
+	Key                  types.String `tfsdk:"key"`
+	Name                 types.String `tfsdk:"name"`
+	Description          types.String `tfsdk:"description"`
+	Credentials          types.Map    `tfsdk:"credentials"`
+	Settings             types.Map    `tfsdk:"settings"`
+	Status               types.String `tfsdk:"status"`
+	ParentProviderID     types.String `tfsdk:"parent_provider_id"`
+	ExternalID           types.String `tfsdk:"external_id"`
+	SyncFrequencyMinutes types.Int64  `tfsdk:"sync_frequency_minutes"`
+	LastSyncAt           types.String `tfsdk:"last_sync_at"`
+	LastSyncStatus       types.String `tfsdk:"last_sync_status"`
+	NextSyncAt           types.String `tfsdk:"next_sync_at"`
+	CreatedAt            types.String `tfsdk:"created_at"`
+	UpdatedAt            types.String `tfsdk:"updated_at"`
+}
+
+// providerSchemaV0 is the v0.3.x schema, which v0.2.1 shares, kept only as far as decoding its
+// state needs.
+func providerSchemaV0() *schema.Schema {
+	computed := func() schema.StringAttribute { return schema.StringAttribute{Computed: true} }
+	optional := func() schema.StringAttribute { return schema.StringAttribute{Optional: true} }
+	return &schema.Schema{
+		Attributes: map[string]schema.Attribute{
+			"id":                     computed(),
+			"key":                    schema.StringAttribute{Required: true},
+			"name":                   schema.StringAttribute{Required: true},
+			"description":            optional(),
+			"credentials":            schema.MapAttribute{Required: true, Sensitive: true, ElementType: types.StringType},
+			"settings":               schema.MapAttribute{Optional: true, ElementType: types.StringType},
+			"parent_provider_id":     optional(),
+			"sync_frequency_minutes": schema.Int64Attribute{Optional: true, Computed: true},
+			"status":                 computed(),
+			"external_id":            schema.StringAttribute{Optional: true, Computed: true},
+			"last_sync_at":           computed(),
+			"last_sync_status":       computed(),
+			"next_sync_at":           computed(),
+			"created_at":             computed(),
+			"updated_at":             computed(),
+		},
+	}
+}
+
+func upgradeProviderStateV0(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+	var prior providerResourceModelV0
+	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, ProviderResourceModel{
+		ID:                   prior.ID,
+		Key:                  prior.Key,
+		DisplayName:          prior.Name,
+		Description:          prior.Description,
+		Credentials:          prior.Credentials,
+		Settings:             prior.Settings,
+		Status:               prior.Status,
+		ParentProviderID:     prior.ParentProviderID,
+		ExternalID:           prior.ExternalID,
+		SyncFrequencyMinutes: prior.SyncFrequencyMinutes,
+		LastSyncAt:           prior.LastSyncAt,
+		LastSyncStatus:       prior.LastSyncStatus,
+		NextSyncAt:           prior.NextSyncAt,
+		CreatedAt:            prior.CreatedAt,
+		UpdatedAt:            prior.UpdatedAt,
+	})...)
+}
+
 func mapProviderToModel(p *costfluent.Provider, model *ProviderResourceModel) {
 	model.ID = types.StringValue(p.ID)
 	model.Key = types.StringValue(string(p.Key))
-	model.Name = types.StringValue(p.Name)
+	model.DisplayName = types.StringValue(p.DisplayName)
 	model.Status = types.StringValue(string(p.Status))
 	model.SyncFrequencyMinutes = types.Int64Value(int64(p.SyncFrequencyMinutes))
 	model.CreatedAt = types.StringValue(p.CreatedAt.Format(time.RFC3339))

@@ -49,7 +49,7 @@ A budget has a start date and a cadence instead of a period, and its amounts are
 - `start_date` is new. Leave it out to keep the start date the budget already has; changing it
   recreates the budget, as changing the cadence does.
 - `alerts` defaults to 50, 80 and 100 percent. List a budget's thresholds when they differ, or the
-  plan recreates it.
+  plan replaces them with the defaults.
 - Changing or removing `segment_id` now moves the same budget in place.
 - `cost_report_id` (track a saved report's total) and `app_ids` (notification channels) are new.
 - `current_spend` is a decimal string, and `state` is new.

@@ -11,7 +11,7 @@ import (
 func TestAccWorkspace_basic(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -35,6 +35,11 @@ func TestAccWorkspace_basic(t *testing.T) {
 					// A new workspace syncs automatically until somebody turns it off.
 					resource.TestCheckResourceAttr(
 						"costfluent_workspace.test", "enable_automatic_syncing", "true"),
+
+					// Its amortized figures keep each commitment discount where AWS applied it until an
+					// Owner turns blending on.
+					resource.TestCheckResourceAttr(
+						"costfluent_workspace.test", "blend_commitment_discounts", "false"),
 
 					// Its calendar runs in UTC unless a zone is configured.
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "time_zone", "UTC"),
@@ -67,6 +72,8 @@ func TestAccWorkspace_basic(t *testing.T) {
 						"costfluent_workspace.test", "conversion_method", "transactionDate"),
 					resource.TestCheckResourceAttr(
 						"costfluent_workspace.test", "enable_automatic_syncing", "false"),
+					resource.TestCheckResourceAttr(
+						"costfluent_workspace.test", "blend_commitment_discounts", "true"),
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "time_zone", "Europe/Berlin"),
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.date_interval", "lastMonth"),
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.amortize", "false"),
@@ -125,8 +132,9 @@ resource "costfluent_workspace" "test" {
   conversion_currency = "EUR"
   conversion_method   = "transactionDate"
 
-  enable_automatic_syncing = false
-  time_zone                = "Europe/Berlin"
+  enable_automatic_syncing   = false
+  blend_commitment_discounts = true
+  time_zone                  = "Europe/Berlin"
 
   report_defaults = {
     date_interval = "lastMonth"

@@ -19,8 +19,8 @@ resource "costfluent_workspace" "payments" {
 }
 
 resource "costfluent_provider" "aws_payer" {
-  key  = "aws"
-  name = "AWS Organization"
+  key          = "aws"
+  display_name = "AWS Organization"
   credentials = {
     role_arn = "arn:aws:iam::123456789012:role/CostfluentBillingRole"
   }

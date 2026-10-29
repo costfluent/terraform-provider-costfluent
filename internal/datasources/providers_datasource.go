@@ -25,7 +25,7 @@ type ProvidersDataSourceModel struct {
 type ProviderModel struct {
 	ID                   types.String `tfsdk:"id"`
 	Key                  types.String `tfsdk:"key"`
-	Name                 types.String `tfsdk:"name"`
+	DisplayName          types.String `tfsdk:"display_name"`
 	Description          types.String `tfsdk:"description"`
 	Status               types.String `tfsdk:"status"`
 	SyncFrequencyMinutes types.Int64  `tfsdk:"sync_frequency_minutes"`
@@ -59,9 +59,9 @@ func (d *ProvidersDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 							Computed:    true,
 							Description: "Provider type key.",
 						},
-						"name": schema.StringAttribute{
+						"display_name": schema.StringAttribute{
 							Computed:    true,
-							Description: "Provider name.",
+							Description: "Provider display name.",
 						},
 						"description": schema.StringAttribute{
 							Computed:    true,
@@ -120,7 +120,7 @@ func (d *ProvidersDataSource) Read(ctx context.Context, req datasource.ReadReque
 		state.Providers[i] = ProviderModel{
 			ID:                   types.StringValue(p.ID),
 			Key:                  types.StringValue(string(p.Key)),
-			Name:                 types.StringValue(p.Name),
+			DisplayName:          types.StringValue(p.DisplayName),
 			Status:               types.StringValue(string(p.Status)),
 			SyncFrequencyMinutes: types.Int64Value(int64(p.SyncFrequencyMinutes)),
 			CreatedAt:            types.StringValue(p.CreatedAt.Format(time.RFC3339)),

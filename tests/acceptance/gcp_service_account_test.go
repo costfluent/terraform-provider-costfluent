@@ -15,7 +15,7 @@ func TestAccGcpServiceAccount_basic(t *testing.T) {
 	if os.Getenv("COSTFLUENT_ACC_GCP_PROJECT_ID") == "" {
 		t.Skip("COSTFLUENT_ACC_GCP_PROJECT_ID must be set")
 	}
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -46,7 +46,7 @@ func TestAccProvider_gcp(t *testing.T) {
 		t.Skip("COSTFLUENT_ACC_GCP_BILLING_ACCOUNT_ID, COSTFLUENT_ACC_GCP_PROJECT_ID and COSTFLUENT_ACC_GCP_DATASET must be set")
 	}
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -55,8 +55,8 @@ func TestAccProvider_gcp(t *testing.T) {
 resource "costfluent_gcp_service_account" "this" {}
 
 resource "costfluent_provider" "gcp" {
-  key  = "gcp"
-  name = "GCP acceptance"
+  key          = "gcp"
+  display_name = "GCP acceptance"
   credentials = {
     billing_account_id = %q
     project_id         = %q

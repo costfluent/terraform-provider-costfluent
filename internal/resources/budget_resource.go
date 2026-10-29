@@ -27,7 +27,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listdefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -93,12 +92,17 @@ type BudgetResourceModel struct {
 }
 
 type BudgetAlertModel struct {
-	ThresholdPercent types.Int64 `tfsdk:"threshold_percent"`
+	ThresholdPercent types.Int64  `tfsdk:"threshold_percent"`
+	Basis            types.String `tfsdk:"basis"`
 }
 
 var budgetAlertAttrTypes = map[string]attr.Type{
 	"threshold_percent": types.Int64Type,
+	"basis":             types.StringType,
 }
+
+// budgetAlertBases are the bases in the order the API returns a budget's thresholds.
+var budgetAlertBases = []string{costfluent.BudgetAlertBasisActual, costfluent.BudgetAlertBasisForecast}
 
 type BudgetPeriodModel struct {
 	StartDate types.String `tfsdk:"start_date"`
@@ -126,10 +130,15 @@ var budgetCurrencyAmountAttrTypes = map[string]attr.Type{
 // than a computed value: Terraform proposes null for an omitted nested list, which the framework
 // would read as a change and plan a no-op update after every apply.
 var defaultBudgetAlerts = types.ListValueMust(types.ObjectType{AttrTypes: budgetAlertAttrTypes}, []attr.Value{
-	types.ObjectValueMust(budgetAlertAttrTypes, map[string]attr.Value{"threshold_percent": types.Int64Value(50)}),
-	types.ObjectValueMust(budgetAlertAttrTypes, map[string]attr.Value{"threshold_percent": types.Int64Value(80)}),
-	types.ObjectValueMust(budgetAlertAttrTypes, map[string]attr.Value{"threshold_percent": types.Int64Value(100)}),
+	actualBudgetAlert(50), actualBudgetAlert(80), actualBudgetAlert(100),
 })
+
+func actualBudgetAlert(percent int64) attr.Value {
+	return types.ObjectValueMust(budgetAlertAttrTypes, map[string]attr.Value{
+		"threshold_percent": types.Int64Value(percent),
+		"basis":             types.StringValue(costfluent.BudgetAlertBasisActual),
+	})
+}
 
 func NewBudgetResource() resource.Resource {
 	return &BudgetResource{managed{name: "budget", needs: Needs{
@@ -142,7 +151,7 @@ func NewBudgetResource() resource.Resource {
 
 func (r *BudgetResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Version: 1,
+		Version: 2,
 		Description: "Manages a Costfluent budget: a start date, a cadence of interval_count days, weeks, months or " +
 			"years, and an amount for each period, either one amount for every period or periods listed one " +
 			"by one. measure says what the amounts count: money in currency for a cost budget, or a quantity " +
@@ -302,25 +311,36 @@ func (r *BudgetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Optional: true,
 				Computed: true,
 				Default:  listdefault.StaticValue(defaultBudgetAlerts),
-				Description: "Alert thresholds, at least one, listed lowest threshold first with no repeats. " +
-					"Defaults to 50, 80 and 100 percent. Changing them recreates the budget.",
-				// The API reads an empty list as an omitted one and applies its defaults. It stores
-				// alerts lowest first, so only that order keeps configuration, state and API equal
-				// after an import.
+				Description: "Alert thresholds, at least one: the actual ones lowest first, then the forecast ones " +
+					"lowest first, each percent once per basis. Defaults to actual thresholds at 50, 80 and 100 " +
+					"percent. Changing them updates the budget in place: a threshold kept at the same percent and " +
+					"basis keeps whether it fired this period, a new one starts armed, and one left out is removed.",
+				// The API refuses an empty list on update and reads one as omitted on create. It returns
+				// the actual thresholds lowest first, then the forecast ones, so only that order keeps
+				// configuration, state and API equal.
 				Validators: []validator.List{
 					listvalidator.SizeAtLeast(1),
-					validators.StrictlyAscending("threshold_percent"),
-				},
-				PlanModifiers: []planmodifier.List{
-					listplanmodifier.RequiresReplace(),
+					validators.StrictlyAscending("basis", budgetAlertBases, "threshold_percent"),
 				},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"threshold_percent": schema.Int64Attribute{
-							Required:    true,
-							Description: "Alert threshold as a percentage of the current period's amount (1-200). When several are crossed at once, only the highest notifies.",
+							Required: true,
+							Description: "Alert threshold as a percentage of the current period's amount (1-200). When several " +
+								"are crossed at once, only the highest notifies, the actual one at an equal percent.",
 							Validators: []validator.Int64{
 								int64validator.Between(1, 200),
+							},
+						},
+						"basis": schema.StringAttribute{
+							Optional: true,
+							Computed: true,
+							Default:  stringdefault.StaticString(costfluent.BudgetAlertBasisActual),
+							Description: "What the threshold is held against: actual, the spend so far in the period, or " +
+								"forecast, the forecast for the period's end, which notifies once a period when it reaches " +
+								"the threshold. Defaults to actual. A usage budget takes no forecast threshold.",
+							Validators: []validator.String{
+								stringvalidator.OneOf(budgetAlertBases...),
 							},
 						},
 					},
@@ -408,7 +428,8 @@ func requiresReplaceWhenMeasureChanges() planmodifier.String {
 }
 
 // ValidateConfig holds each measure to the fields the API takes with it, so a plan fails before
-// apply: a usage budget counts one unit on a saved report's rows, and a cost budget counts no unit.
+// apply: a usage budget counts one unit on a saved report's rows and has no forecast threshold, and
+// a cost budget counts no unit.
 func (r *BudgetResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var config BudgetResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
@@ -436,6 +457,20 @@ func (r *BudgetResource) ValidateConfig(ctx context.Context, req resource.Valida
 	if given(config.SegmentID) {
 		resp.Diagnostics.AddAttributeError(path.Root("segment_id"), "Unexpected segment_id",
 			"A usage budget counts usage on a saved cost report's rows, not a segment's cost; remove segment_id.")
+	}
+	if config.Alerts.IsNull() || config.Alerts.IsUnknown() {
+		return
+	}
+	for _, element := range config.Alerts.Elements() {
+		alert, ok := element.(types.Object)
+		if !ok || alert.IsNull() || alert.IsUnknown() {
+			continue
+		}
+		if basis, ok := alert.Attributes()["basis"].(types.String); ok && basis.ValueString() == costfluent.BudgetAlertBasisForecast {
+			resp.Diagnostics.AddAttributeError(path.Root("alerts"), "Unexpected forecast threshold",
+				"A usage budget has no forecast; give its thresholds the actual basis, or set measure to cost.")
+			return
+		}
 	}
 }
 
@@ -468,15 +503,11 @@ func (r *BudgetResource) Create(ctx context.Context, req resource.CreateRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if !plan.Alerts.IsNull() && !plan.Alerts.IsUnknown() {
-		var alerts []BudgetAlertModel
-		resp.Diagnostics.Append(plan.Alerts.ElementsAs(ctx, &alerts, false)...)
-		if resp.Diagnostics.HasError() {
-			return
-		}
-		for _, a := range alerts {
-			input.Alerts = append(input.Alerts, costfluent.BudgetAlertInput{ThresholdPercent: int(a.ThresholdPercent.ValueInt64())})
-		}
+	if alerts, ok := plannedAlerts(ctx, plan.Alerts, &resp.Diagnostics); ok {
+		input.Alerts = alerts
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 	if !plan.AppIDs.IsNull() && !plan.AppIDs.IsUnknown() {
 		resp.Diagnostics.Append(plan.AppIDs.ElementsAs(ctx, &input.AppIDs, false)...)
@@ -563,6 +594,14 @@ func (r *BudgetResource) Update(ctx context.Context, req resource.UpdateRequest,
 			}
 		}
 		input.AppIDs = &appIDs
+	}
+	if !plan.Alerts.Equal(state.Alerts) {
+		if alerts, ok := plannedAlerts(ctx, plan.Alerts, &resp.Diagnostics); ok {
+			input.Alerts = &alerts
+		}
+		if resp.Diagnostics.HasError() {
+			return
+		}
 	}
 
 	var budget *costfluent.Budget
@@ -661,6 +700,23 @@ func plannedPeriods(ctx context.Context, list types.List, diags *diag.Diagnostic
 	return periods, !diags.HasError()
 }
 
+// plannedAlerts is the configured thresholds to send, and false when there are none.
+func plannedAlerts(ctx context.Context, list types.List, diags *diag.Diagnostics) ([]costfluent.BudgetAlertInput, bool) {
+	if list.IsNull() || list.IsUnknown() {
+		return nil, false
+	}
+	var models []BudgetAlertModel
+	diags.Append(list.ElementsAs(ctx, &models, false)...)
+	alerts := make([]costfluent.BudgetAlertInput, 0, len(models))
+	for _, m := range models {
+		alerts = append(alerts, costfluent.BudgetAlertInput{
+			ThresholdPercent: int(m.ThresholdPercent.ValueInt64()),
+			Basis:            m.Basis.ValueString(),
+		})
+	}
+	return alerts, !diags.HasError()
+}
+
 // samePeriods holds two period lists equal when their days match and their amounts are the same
 // number, whatever the scale.
 func samePeriods(ctx context.Context, plan, state types.List) bool {
@@ -752,7 +808,10 @@ func mapBudgetToModel(b *costfluent.Budget, model *BudgetResourceModel) diag.Dia
 	}
 	alerts := make([]BudgetAlertModel, 0, len(b.Alerts))
 	for _, a := range b.Alerts {
-		alerts = append(alerts, BudgetAlertModel{ThresholdPercent: types.Int64Value(int64(a.ThresholdPercent))})
+		alerts = append(alerts, BudgetAlertModel{
+			ThresholdPercent: types.Int64Value(int64(a.ThresholdPercent)),
+			Basis:            types.StringValue(a.Basis),
+		})
 	}
 	list, d := types.ListValueFrom(context.Background(), types.ObjectType{AttrTypes: budgetAlertAttrTypes}, alerts)
 	model.Alerts = list
@@ -784,15 +843,44 @@ func mapBudgetPeriods(periods []costfluent.BudgetPeriod, model *BudgetResourceMo
 	return append(diags, d...)
 }
 
-// UpgradeState carries state written by v0.2.1 and earlier onto the cadence: a float amount and a
-// period become a decimal string and interval_count and interval_unit, and the API's values take
-// their camelCase wire spelling. It also reads the state of builds between v0.2.1 and this one,
-// which stored the cadence with its unit capitalised. The two shapes disagree on the type of amount,
-// so the state is read as JSON rather than through a prior schema.
-func (r *BudgetResource) UpgradeState(_ context.Context) map[int64]resource.StateUpgrader {
+// UpgradeState carries each prior version straight to the current one, as the framework runs only
+// the upgrader of the stored version. Version 0 is state written by v0.2.1 and earlier, upgraded onto
+// the cadence: a float amount and a period become a decimal string and interval_count and
+// interval_unit, and the API's values take their camelCase wire spelling. Version 0 is also the
+// state of the builds after v0.2.1 that stored the cadence with its unit capitalised. The two shapes
+// disagree on the type of amount, so that state is read as JSON rather than through a prior schema.
+// Version 1 predates forecast thresholds, so every alert in it held the spend.
+func (r *BudgetResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
+	var current resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &current)
 	return map[int64]resource.StateUpgrader{
 		0: {StateUpgrader: upgradeBudgetStateV0},
+		// Version 1 is this schema without alerts[].basis: decoding fills an attribute the stored
+		// state lacks with null, as it does for those added within version 1, such as measure.
+		1: {PriorSchema: &current.Schema, StateUpgrader: upgradeBudgetStateV1},
 	}
+}
+
+func upgradeBudgetStateV1(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+	var model BudgetResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if !model.Alerts.IsNull() && !model.Alerts.IsUnknown() {
+		var alerts []BudgetAlertModel
+		resp.Diagnostics.Append(model.Alerts.ElementsAs(ctx, &alerts, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		for i := range alerts {
+			alerts[i].Basis = types.StringValue(costfluent.BudgetAlertBasisActual)
+		}
+		var d diag.Diagnostics
+		model.Alerts, d = types.ListValueFrom(ctx, types.ObjectType{AttrTypes: budgetAlertAttrTypes}, alerts)
+		resp.Diagnostics.Append(d...)
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, model)...)
 }
 
 // v021BudgetPeriods is the cadence each v0.2.1 period stands for.
@@ -965,7 +1053,10 @@ func v0Alerts(ctx context.Context, value any, diags *diag.Diagnostics) types.Lis
 			diags.AddError("Unable to upgrade budget state", fmt.Sprintf("Alert threshold %q is not a whole number.", threshold))
 			return types.ListNull(elementType)
 		}
-		alerts = append(alerts, BudgetAlertModel{ThresholdPercent: types.Int64Value(n)})
+		alerts = append(alerts, BudgetAlertModel{
+			ThresholdPercent: types.Int64Value(n),
+			Basis:            types.StringValue(costfluent.BudgetAlertBasisActual),
+		})
 	}
 	list, d := types.ListValueFrom(ctx, elementType, alerts)
 	diags.Append(d...)

@@ -23,7 +23,7 @@ func TestProvidersDataSourceListsEveryPage(t *testing.T) {
 				resource.TestCheckResourceAttr("data.costfluent_providers.all", "providers.#", "2"),
 				resource.TestCheckResourceAttr("data.costfluent_providers.all", "providers.0.id", awsProvider),
 				resource.TestCheckResourceAttr("data.costfluent_providers.all", "providers.0.key", "aws"),
-				resource.TestCheckResourceAttr("data.costfluent_providers.all", "providers.0.name", "AWS prod"),
+				resource.TestCheckResourceAttr("data.costfluent_providers.all", "providers.0.display_name", "AWS prod"),
 				resource.TestCheckResourceAttr("data.costfluent_providers.all", "providers.0.description", "Management account"),
 				resource.TestCheckResourceAttr("data.costfluent_providers.all", "providers.0.status", "active"),
 				resource.TestCheckResourceAttr("data.costfluent_providers.all", "providers.0.sync_frequency_minutes", "1440"),

@@ -24,8 +24,8 @@ terraform {
 
 Until 1.0, a minor version may need changes to your configuration, so pin the minor version as
 above: `~> 0.3.0` takes patch versions only, and a patch version never does. Each minor version
-that needs changes has an upgrade guide; for 0.2.x to 0.3.0, see
-[Upgrading from 0.2](docs/guides/upgrade-from-0.2.md).
+that needs changes has an upgrade guide: [Upgrading from 0.2](docs/guides/upgrade-from-0.2.md) for
+0.2.x to 0.3.0, and [Upgrading from 0.3](docs/guides/upgrade-from-0.3.md) for 0.3.x to 0.4.0.
 
 ### Local Development
 
@@ -70,6 +70,7 @@ provider "costfluent" {
 | `costfluent_segment` | Segments that allocation rules claim cost for |
 | `costfluent_allocation_rule` | Ordered rules that assign matching cost to a segment |
 | `costfluent_saved_filter` | Reusable filter configurations |
+| `costfluent_savings_view` | A saved view of a workspace's savings queue: a tab and its filters |
 | `costfluent_virtual_tag` | Virtual tag mapping rules |
 | `costfluent_tag_policy` | A workspace's tag policy: the required keys its cost must carry |
 
@@ -79,9 +80,11 @@ provider "costfluent" {
 |-------------|-------------|
 | `costfluent_workspace` | Lookup workspace by ID or name |
 | `costfluent_workspaces` | List all workspaces |
-| `costfluent_provider` | Lookup provider by ID or name |
+| `costfluent_provider` | Lookup provider by ID or display name |
 | `costfluent_providers` | List all providers |
 | `costfluent_anomalies` | List detected cost anomalies |
+| `costfluent_savings_items` | List the findings in a workspace's savings queue |
+| `costfluent_commitments` | List the reservations, savings plans and committed use discounts a workspace's connections hold |
 | `costfluent_cost_summary` | Cost summary for a window |
 | `costfluent_cost_data` | Query cost data (may be slow) |
 | `costfluent_entitlement` | The account's plan and the limits it carries |
@@ -109,10 +112,10 @@ module "costfluent_aws" {
 }
 
 resource "costfluent_provider" "aws" {
-  key         = "aws"
-  name        = "Production AWS"
-  credentials = module.costfluent_aws.credentials
-  settings    = module.costfluent_aws.settings
+  key          = "aws"
+  display_name = "Production AWS"
+  credentials  = module.costfluent_aws.credentials
+  settings     = module.costfluent_aws.settings
 }
 ```
 

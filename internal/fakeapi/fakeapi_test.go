@@ -179,7 +179,7 @@ func TestListsArePaged(t *testing.T) {
 	s := New(t)
 	s.Collection("/v1/providers", Collection{IDPrefix: "prv_"})
 	for range 45 {
-		call(t, s, http.MethodPost, "/v1/providers", `{"name":"p"}`)
+		call(t, s, http.MethodPost, "/v1/providers", `{"displayName":"p"}`)
 	}
 
 	for _, tc := range []struct {

@@ -42,7 +42,7 @@ func TestDataSourcesNameTheCapabilityTheTokenLacks(t *testing.T) {
 		"entitlement": {"", `data "costfluent_entitlement" "e" {}`, "/v1/entitlement", costfluent.CapabilityViewSubscription, "Failed to read entitlement"},
 		"provider by id": {"", fmt.Sprintf(`data "costfluent_provider" "p" { id = %q }`, awsProvider), "/v1/providers/" + awsProvider,
 			costfluent.CapabilityViewProviders, "Failed to read provider"},
-		"provider by name": {"", `data "costfluent_provider" "p" { name = "AWS prod" }`, "/v1/providers",
+		"provider by display name": {"", `data "costfluent_provider" "p" { display_name = "AWS prod" }`, "/v1/providers",
 			costfluent.CapabilityViewProviders, "Failed to list providers"},
 		"providers": {"", `data "costfluent_providers" "all" {}`, "/v1/providers", costfluent.CapabilityViewProviders, "Failed to list providers"},
 		"user":      {"", `data "costfluent_user" "u" { email = "lena@example.com" }`, "/v1/users", costfluent.CapabilityViewMembers, "Failed to list users"},

@@ -3,12 +3,12 @@
 page_title: "costfluent_team_workspace_access Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages what one team's members may do in one workspace. Needs an organization token with manageWorkspaceAccess and viewMembers.
+  Manages what one team's members may do in one workspace. Needs an organization token with manageWorkspaceAccess, viewMembers and viewDashboards.
 ---
 
 # costfluent_team_workspace_access (Resource)
 
-Manages what one team's members may do in one workspace. Needs an organization token with `manageWorkspaceAccess` and `viewMembers`.
+Manages what one team's members may do in one workspace. Needs an organization token with `manageWorkspaceAccess`, `viewMembers` and `viewDashboards`.
 
 ## Example Usage
 
@@ -22,11 +22,18 @@ resource "costfluent_workspace" "production" {
   currency = "USD"
 }
 
-# The platform team's members can view and change everything in the production workspace
-resource "costfluent_team_workspace_access" "platform_production" {
-  team_id      = costfluent_team.platform.id
+resource "costfluent_dashboard" "platform_costs" {
   workspace_id = costfluent_workspace.production.id
-  access_level = "canEdit"
+  title        = "Platform costs"
+}
+
+# The platform team's members can view and change everything in the production workspace, and open
+# on the platform costs dashboard after signing in unless they chose their own
+resource "costfluent_team_workspace_access" "platform_production" {
+  team_id              = costfluent_team.platform.id
+  workspace_id         = costfluent_workspace.production.id
+  access_level         = "canEdit"
+  default_dashboard_id = costfluent_dashboard.platform_costs.id
 }
 ```
 
@@ -38,6 +45,10 @@ resource "costfluent_team_workspace_access" "platform_production" {
 - `access_level` (String) One of noAccess, canView or canEdit.
 - `team_id` (String) Team ID.
 - `workspace_id` (String) Workspace ID.
+
+### Optional
+
+- `default_dashboard_id` (String) ID of a dashboard in the workspace that the team's members open after signing in, unless they chose their own; not allowed with noAccess. Remove it to clear the default. Setting or clearing it also needs `viewDashboards`. Changing the team's default in the console shows as drift, which the next apply sets back; deleting the dashboard clears the default.
 
 ### Read-Only
 

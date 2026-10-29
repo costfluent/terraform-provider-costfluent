@@ -11,7 +11,7 @@ test:
 	go test -v ./...
 
 testacc:
-	TF_ACC=1 go test -v ./tests/acceptance/... -timeout 30m
+	TF_ACC=1 go test -v ./tests/acceptance/... -parallel 4 -timeout 12m
 
 # Pinned rather than floating: the generated pages are committed and published to the Terraform
 # Registry, and a newer generator rewrites all of them on whoever runs it next.

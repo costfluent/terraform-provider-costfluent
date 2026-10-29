@@ -33,6 +33,15 @@ jobs:
           # A tag run restores caches the default branch wrote, and a restored module skips the go.sum check.
           cache: false
 
+      # The provider's tests run Terraform. With none on PATH the test framework downloads it once per
+      # test, and releases have failed there on an expired HashiCorp signing key and on parallel tests
+      # executing a binary still being written. The wrapper would replace terraform with a Node script.
+      - name: Setup terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
       # The tag is cut from a reviewed merge, so this is the last chance to stop a broken build
       # before it is signed and ingested by the registry.
       - name: Test

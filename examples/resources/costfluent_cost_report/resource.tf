@@ -34,6 +34,24 @@ resource "costfluent_cost_report" "monthly_by_service" {
   }
 }
 
+# Each service as a category, this month's bar beside last month's: the group axis sets the
+# report's own grouping along the chart, for a bar or stacked bar chart in a bin other than
+# cumulative.
+resource "costfluent_cost_report" "services_side_by_side" {
+  workspace_id = costfluent_workspace.production.id
+  title        = "This month against last, by service"
+
+  date_interval = "ThisMonth"
+  date_bin      = "Month"
+  chart_type    = "Bar"
+  chart_axis    = "Group"
+  group_by      = [{ dimension = "ServiceName" }]
+
+  settings = {
+    compare_to_last_period = true
+  }
+}
+
 # The filter travels as the same JSON document the app puts in its URL, so a report saved here and
 # one saved in the app are the same definition.
 resource "costfluent_cost_report" "q4_eu_compute" {

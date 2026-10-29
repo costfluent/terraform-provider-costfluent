@@ -15,10 +15,12 @@ import (
 
 const teamWorkspace = "wsp_0000000000000000000002"
 
-// teamAccess is the workspace access the fake holds per team; Terraform refreshes in parallel.
+// teamAccess is the workspace access the fake holds per team, and each grant's default dashboard;
+// Terraform refreshes in parallel.
 type teamAccess struct {
-	mu     sync.Mutex
-	levels map[string]map[string]string
+	mu       sync.Mutex
+	levels   map[string]map[string]string
+	defaults map[string]map[string]string
 }
 
 func (a *teamAccess) level(team, workspace string) string {
@@ -31,12 +33,44 @@ func (a *teamAccess) remove(team, workspace string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.levels[team], workspace)
+	delete(a.defaults[team], workspace)
+}
+
+func (a *teamAccess) defaultDashboard(team, workspace string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.defaults[team][workspace]
+}
+
+// setDefault is a default set in the console; an empty dashboard clears it.
+func (a *teamAccess) setDefault(team, workspace, dashboard string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.defaults[team] == nil {
+		a.defaults[team] = map[string]string{}
+	}
+	if dashboard == "" {
+		delete(a.defaults[team], workspace)
+		return
+	}
+	a.defaults[team][workspace] = dashboard
+}
+
+// grantView is a grant as the API answers it, defaultDashboardId null for none. The caller holds mu.
+func (a *teamAccess) grantView(team, workspace string) map[string]any {
+	var dashboard any
+	if id, ok := a.defaults[team][workspace]; ok {
+		dashboard = id
+	}
+	return map[string]any{"workspaceId": workspace, "workspaceName": "Prod", "accessLevel": a.levels[team][workspace],
+		"defaultDashboardId": dashboard}
 }
 
 // teamFake serves /v1/teams with TeamResponse on create, list and update, TeamDetailResponse on a
-// read, and the workspace access of each team under /v1/teams/{id}/workspaces.
+// read, and the workspace access of each team under /v1/teams/{id}/workspaces, with its default
+// dashboard, which a level change keeps and removing the grant ends.
 func teamFake(api *fakeapi.Server) *teamAccess {
-	access := &teamAccess{levels: map[string]map[string]string{}}
+	access := &teamAccess{levels: map[string]map[string]string{}, defaults: map[string]map[string]string{}}
 	api.Collection("/v1/teams", fakeapi.Collection{
 		IDPrefix:  "team_",
 		Versioned: true,
@@ -58,8 +92,8 @@ func teamFake(api *fakeapi.Server) *teamAccess {
 		access.mu.Lock()
 		defer access.mu.Unlock()
 		items := []any{}
-		for workspace, level := range access.levels[r.PathValue("id")] {
-			items = append(items, map[string]any{"workspaceId": workspace, "workspaceName": "Prod", "accessLevel": level})
+		for workspace := range access.levels[r.PathValue("id")] {
+			items = append(items, access.grantView(r.PathValue("id"), workspace))
 		}
 		return fakeapi.Page(r, "/v1/teams/"+r.PathValue("id")+"/workspaces", items)
 	})
@@ -74,6 +108,25 @@ func teamFake(api *fakeapi.Server) *teamAccess {
 		}
 		access.levels[r.PathValue("id")][r.PathValue("workspace")] = r.Body["accessLevel"].(string)
 		return fakeapi.NoContent()
+	})
+	api.Handle("PUT /v1/teams/{id}/workspaces/{workspace}/default-dashboard", func(r fakeapi.Request) fakeapi.Response {
+		team, workspace := r.PathValue("id"), r.PathValue("workspace")
+		dashboard, sent := r.Body["dashboardId"]
+		if !sent {
+			return fakeapi.Problem(http.StatusBadRequest, "Validation", "dashboardId is required, null to clear")
+		}
+		level := access.level(team, workspace)
+		if level == "" {
+			return fakeapi.NotFound()
+		}
+		if dashboard != nil && level == "noAccess" {
+			return fakeapi.Problem(http.StatusBadRequest, "Validation", "A team without access to the workspace has no default dashboard there")
+		}
+		id, _ := dashboard.(string)
+		access.setDefault(team, workspace, id)
+		access.mu.Lock()
+		defer access.mu.Unlock()
+		return fakeapi.JSON(access.grantView(team, workspace))
 	})
 	api.Handle("DELETE /v1/teams/{id}/workspaces/{workspace}", func(r fakeapi.Request) fakeapi.Response {
 		if access.level(r.PathValue("id"), r.PathValue("workspace")) == "" {
@@ -189,6 +242,181 @@ func TestTeamWorkspaceAccessRemovedOutsideTerraformIsSetAgain(t *testing.T) {
 			{
 				PreConfig:          func() { access.remove(teamOnlyID(t, api), teamWorkspace) },
 				Config:             teamConfig(api, "Platform", "canView"),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+		},
+	})
+}
+
+// teamDefaultDashboardConfig is a team granted level on the workspace, with dashboard as its default
+// there when not empty.
+func teamDefaultDashboardConfig(api *fakeapi.Server, level, dashboard string) string {
+	attr := ""
+	if dashboard != "" {
+		attr = fmt.Sprintf("  default_dashboard_id = %q\n", dashboard)
+	}
+	return api.ProviderBlock() + fmt.Sprintf(`
+resource "costfluent_team" "t" {
+  name = "Platform"
+}
+
+resource "costfluent_team_workspace_access" "a" {
+  team_id      = costfluent_team.t.id
+  workspace_id = %q
+  access_level = %q
+%s}
+`, teamWorkspace, level, attr)
+}
+
+func TestTeamWorkspaceAccessDefaultDashboard(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	access := teamFake(api)
+	const first, second, console = "dsh_0000000000000000000001", "dsh_0000000000000000000002", "dsh_0000000000000000000003"
+	grant := func() string { return "/v1/teams/" + teamOnlyID(t, api) + "/workspaces/" + teamWorkspace }
+
+	// sent checks every default-dashboard call so far, by the dashboardId each sent, nil for a clear,
+	// and how many times the access level was set.
+	sent := func(levelCalls int, dashboards ...any) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			if calls := api.Requests(http.MethodPut, grant()); len(calls) != levelCalls {
+				return fmt.Errorf("access level set %d times, want %d", len(calls), levelCalls)
+			}
+			calls := api.Requests(http.MethodPut, grant()+"/default-dashboard")
+			if len(calls) != len(dashboards) {
+				return fmt.Errorf("default-dashboard called %d times, want %d", len(calls), len(dashboards))
+			}
+			for i, call := range calls {
+				if value, ok := call.Body["dashboardId"]; !ok || value != dashboards[i] {
+					return fmt.Errorf("default-dashboard call %d sent %s, want dashboardId %v", i, call.Raw, dashboards[i])
+				}
+			}
+			return nil
+		}
+	}
+	stored := func(level, dashboard string) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			team := teamOnlyID(t, api)
+			if got := access.level(team, teamWorkspace); got != level {
+				return fmt.Errorf("access level = %q, want %q", got, level)
+			}
+			if got := access.defaultDashboard(team, teamWorkspace); got != dashboard {
+				return fmt.Errorf("default dashboard = %q, want %q", got, dashboard)
+			}
+			return nil
+		}
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				// The API refuses a default on a noAccess grant, so the plan does, before the grant is written.
+				Config:      teamDefaultDashboardConfig(api, "noAccess", first),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`No default dashboard without access`),
+			},
+			{
+				Config: teamDefaultDashboardConfig(api, "canView", first),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_team_workspace_access.a", "default_dashboard_id", first),
+					sent(1, first),
+					stored("canView", first),
+				),
+			},
+			{
+				ResourceName:      "costfluent_team_workspace_access.a",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateIdFunc: func(*terraform.State) (string, error) {
+					return teamOnlyID(t, api) + ":" + teamWorkspace, nil
+				},
+			},
+			{
+				Config: teamDefaultDashboardConfig(api, "canView", second),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_team_workspace_access.a", "default_dashboard_id", second),
+					sent(1, first, second),
+					stored("canView", second),
+				),
+			},
+			{
+				// The access call keeps the default, so a level change sends no default call.
+				Config: teamDefaultDashboardConfig(api, "canEdit", second),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_team_workspace_access.a", "access_level", "canEdit"),
+					resource.TestCheckResourceAttr("costfluent_team_workspace_access.a", "default_dashboard_id", second),
+					sent(2, first, second),
+					stored("canEdit", second),
+				),
+			},
+			{
+				PreConfig:          func() { access.setDefault(teamOnlyID(t, api), teamWorkspace, console) },
+				Config:             teamDefaultDashboardConfig(api, "canEdit", second),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				Config: teamDefaultDashboardConfig(api, "canEdit", ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("costfluent_team_workspace_access.a", "default_dashboard_id"),
+					sent(2, first, second, nil),
+					stored("canEdit", ""),
+				),
+			},
+		},
+	})
+}
+
+// A grant whose default cannot be set, created or updated, is still recorded with the level
+// written and the default it had, so the next apply sets the default rather than losing the grant.
+func TestTeamWorkspaceAccessDefaultDashboardFailureKeepsTheGrant(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	access := teamFake(api)
+	const missing = "dsh_0000000000000000000009"
+	failNext := func() {
+		api.FailNext(http.MethodPut, "/v1/teams/"+teamOnlyID(t, api)+"/workspaces/"+teamWorkspace+"/default-dashboard",
+			fakeapi.Problem(http.StatusNotFound, "NotFound", "Dashboard "+missing+" was not found"))
+	}
+	written := func(level string) func() {
+		return func() {
+			team := teamOnlyID(t, api)
+			if got := access.level(team, teamWorkspace); got != level {
+				t.Fatalf("access level = %q, want the %s written before the default failed", got, level)
+			}
+			if got := access.defaultDashboard(team, teamWorkspace); got != "" {
+				t.Fatalf("default dashboard = %q, want none", got)
+			}
+		}
+	}
+	failed := regexp.MustCompile(`Failed to set the team's default dashboard(.|\n)*was not found`)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: teamConfig(api, "Platform", "")},
+			{
+				PreConfig:   failNext,
+				Config:      teamDefaultDashboardConfig(api, "canView", missing),
+				ExpectError: failed,
+			},
+			{
+				PreConfig:          written("canView"),
+				Config:             teamDefaultDashboardConfig(api, "canView", missing),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			{Config: teamDefaultDashboardConfig(api, "canView", "")},
+			{
+				PreConfig:   failNext,
+				Config:      teamDefaultDashboardConfig(api, "canEdit", missing),
+				ExpectError: failed,
+			},
+			{
+				PreConfig:          written("canEdit"),
+				Config:             teamDefaultDashboardConfig(api, "canEdit", missing),
 				PlanOnly:           true,
 				ExpectNonEmptyPlan: true,
 			},

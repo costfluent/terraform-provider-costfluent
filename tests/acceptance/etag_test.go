@@ -19,7 +19,7 @@ func TestAccEntityTags_folderChangedOutsideTerraform(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 	var workspaceID, folderID, staleTag string
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy: testAccCheckGone("costfluent_folder", existsByGet(func(c *costfluent.Client, ctx context.Context, ws, id string) (*costfluent.Folder, error) {
@@ -88,7 +88,7 @@ func TestAccEntityTags_segmentChangedOutsideTerraform(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 	var workspaceID, segmentID string
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckGone("costfluent_segment", segmentExists),

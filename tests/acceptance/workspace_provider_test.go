@@ -17,7 +17,7 @@ const testAccPartnerConnection = "AWS E2E Partner"
 func TestAccWorkspaceProvider_lifecycle(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -62,7 +62,7 @@ func TestAccWorkspaceProvider_lifecycle(t *testing.T) {
 func testAccWorkspaceProviderConfig(name, accounts string, enabled bool) string {
 	return testAccWorkspaceFixture(name) + fmt.Sprintf(`
 data "costfluent_provider" "partner" {
-  name = %q
+  display_name = %q
 }
 
 resource "costfluent_workspace_provider" "test" {

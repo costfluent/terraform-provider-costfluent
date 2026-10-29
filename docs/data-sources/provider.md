@@ -3,19 +3,19 @@
 page_title: "costfluent_provider Data Source - Costfluent"
 subcategory: ""
 description: |-
-  Fetch a Costfluent provider by ID or name.
+  Fetch a Costfluent provider by ID or display name.
 ---
 
 # costfluent_provider (Data Source)
 
-Fetch a Costfluent provider by ID or name.
+Fetch a Costfluent provider by ID or display name.
 
 ## Example Usage
 
 ```terraform
-# Lookup provider by name
+# Lookup provider by display name
 data "costfluent_provider" "aws_main" {
-  name = "Production AWS"
+  display_name = "Production AWS"
 }
 
 # Alert on that one connection's cost.
@@ -40,8 +40,8 @@ output "last_sync" {
 
 ### Optional
 
-- `id` (String) Provider ID. Either id or name must be specified.
-- `name` (String) Provider name. Either id or name must be specified. A provider connected without a name is named after its type (`Amazon Web Services`), so several can share one; a name several providers share is refused, and id picks one of them.
+- `display_name` (String) Provider display name. Either id or display_name must be specified. A provider connected without a display name is named after its type (`Amazon Web Services`), so several can share one; a display name several providers share is refused, and id picks one of them.
+- `id` (String) Provider ID. Either id or display_name must be specified.
 
 ### Read-Only
 
