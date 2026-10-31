@@ -153,6 +153,7 @@ func TestWorkspaceDefaultedResourcesKeepTheirWorkspace(t *testing.T) {
 	t.Parallel()
 	for _, r := range workspaceDefaultedResources() {
 		t.Run(r.address, func(t *testing.T) {
+			t.Parallel()
 			api := fakeapi.New(t)
 			r.fake(api)
 			var created string
@@ -222,6 +223,7 @@ func TestWorkspaceDefaultedResourcesBackfillWorkspaceOnRead(t *testing.T) {
 	t.Parallel()
 	for _, r := range workspaceDefaultedResources() {
 		t.Run(r.address, func(t *testing.T) {
+			t.Parallel()
 			api := fakeapi.New(t)
 			r.fake(api)
 			config := withoutWorkspace(api, r.config(api), testWorkspace)
@@ -259,6 +261,7 @@ func TestWorkspaceDefaultedResourcesKeepAnExplicitWorkspace(t *testing.T) {
 	t.Parallel()
 	for _, r := range workspaceDefaultedResources() {
 		t.Run(r.address, func(t *testing.T) {
+			t.Parallel()
 			api := fakeapi.New(t)
 			r.fake(api)
 
@@ -283,6 +286,7 @@ func TestWorkspaceDefaultedResourcesUpdateKeepsANullWorkspace(t *testing.T) {
 	t.Parallel()
 	for _, r := range workspaceDefaultedResources() {
 		t.Run(r.address, func(t *testing.T) {
+			t.Parallel()
 			api := fakeapi.New(t)
 			r.fake(api)
 

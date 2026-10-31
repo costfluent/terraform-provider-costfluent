@@ -383,6 +383,7 @@ func TestDashboardWidgetConfigHoldsEachTypeToItsFields(t *testing.T) {
 		"zero width":              {"  title = \"W\"\n  cost_report_id = \"" + testReport + "\"\n  position = { x = 0, y = 0, w = 0, h = 1 }\n", `must be at least 1`},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			resource.UnitTest(t, resource.TestCase{
 				ProtoV6ProviderFactories: factories,
 				Steps: []resource.TestStep{{
@@ -393,9 +394,13 @@ func TestDashboardWidgetConfigHoldsEachTypeToItsFields(t *testing.T) {
 			})
 		})
 	}
-	if calls := api.Requests("", widgetsOf(testDashboard)); len(calls) != 0 {
-		t.Fatalf("an invalid configuration reached the API: %d requests", len(calls))
-	}
+	// The subtests are parallel and start only once this function returns, so the check waits for
+	// them in a cleanup; after the loop it would run before any of them.
+	t.Cleanup(func() {
+		if calls := api.Requests("", widgetsOf(testDashboard)); len(calls) != 0 {
+			t.Errorf("an invalid configuration reached the API: %d requests", len(calls))
+		}
+	})
 }
 
 func TestDashboardWidgetImportInTheProviderWorkspaceAndRefusesAMalformedID(t *testing.T) {

@@ -48,6 +48,42 @@ func TestAccProvidersDataSource_basic(t *testing.T) {
 	})
 }
 
+// The acceptance organization is on the Custom plan with no limit raised for it, so the entitlement
+// reads the Custom rung of the published plan ladder: three years of history, thirteen months of
+// backfill, EUR, and every other limit unlimited, which the provider leaves null rather than zero.
+// InvoiceReconciliation is a feature only Custom sells. A limit raised for the organization later
+// changes these values and shows in overridden_limits.
+func TestAccEntitlementDataSource_readsTheAccountsPlan(t *testing.T) {
+	const name = "data.costfluent_entitlement.plan"
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{{
+			Config: `data "costfluent_entitlement" "plan" {}`,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr(name, "plan_code", "Custom"),
+				resource.TestCheckResourceAttr(name, "plan_name", "Custom"),
+				resource.TestCheckResourceAttrSet(name, "status"),
+				resource.TestCheckResourceAttr(name, "currency", "EUR"),
+				resource.TestCheckResourceAttr(name, "history_days", "1095"),
+				resource.TestCheckResourceAttr(name, "max_backfill_months", "13"),
+				resource.TestCheckResourceAttr(name, "overridden_limits.#", "0"),
+				resource.TestCheckTypeSetElemAttr(name, "features.*", "AuditExport"),
+				resource.TestCheckTypeSetElemAttr(name, "features.*", "InvoiceReconciliation"),
+				resource.TestCheckResourceAttr(name, "ingestion_halted", "false"),
+				resource.TestCheckResourceAttrSet(name, "current_period_start"),
+				resource.TestCheckResourceAttrSet(name, "current_period_end"),
+				resource.TestCheckNoResourceAttr(name, "spend_ceiling"),
+				resource.TestCheckNoResourceAttr(name, "max_connections"),
+				resource.TestCheckNoResourceAttr(name, "max_allocation_rules"),
+				resource.TestCheckNoResourceAttr(name, "max_rows_per_month"),
+				resource.TestCheckNoResourceAttr(name, "max_bytes_stored"),
+			),
+		}},
+	})
+}
+
 // A new workspace holds no cost, so the queries are checked for their contract: the API takes the
 // window, the groupings and the filter, and answers with totals and rows.
 func TestAccCostDataSources_queryAWorkspace(t *testing.T) {

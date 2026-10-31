@@ -15742,7 +15742,7 @@
           "Cost Reports"
         ],
         "summary": "Get cost report data",
-        "description": "Returns the computed cost data for a report. A breakdown row\u0027s \u0060percent\u0060 is its share of the window\u0027s total cost; with conversion off over several currencies, of the total in its own currency.\n\nNeeds a token with \u0060viewCosts\u0060 on the workspace.",
+        "description": "Returns the computed cost data for a report. A breakdown row\u0027s \u0060percent\u0060 is its share of the window\u0027s total cost; with conversion off over several currencies, of the total in its own currency.\n\nNeeds a token with \u0060viewCosts\u0060 on the workspace for every report, and \u0060viewCostReports\u0060 too for a report that charts a business metric.",
         "operationId": "GetCostReportData",
         "parameters": [
           {
@@ -15879,7 +15879,8 @@
         ],
         "x-costfluent-scope": "workspace",
         "x-costfluent-capability": [
-          "viewCosts"
+          "viewCosts",
+          "viewCostReports"
         ]
       }
     },
@@ -32783,6 +32784,11 @@
           },
           "providerKey": {
             "$ref": "#/components/schemas/ProviderKey"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$",
+            "nullable": true
           },
           "cost": {
             "type": "string",

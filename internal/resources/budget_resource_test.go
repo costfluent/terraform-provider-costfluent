@@ -73,6 +73,7 @@ func TestMapBudgetTakesTheAPIAlertsWhenTheyDiffer(t *testing.T) {
 		"nothing yet":       {Alerts: types.ListNull(types.ObjectType{AttrTypes: budgetAlertAttrTypes})},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if diags := mapBudgetToModel(storedBudget(50, 80), &model); diags.HasError() {
 				t.Fatal(diags)
 			}
@@ -178,6 +179,7 @@ func TestMapBudgetTakesTheMeasureAndUsageUnit(t *testing.T) {
 		"cost after a unit":        {cost, BudgetResourceModel{Measure: types.StringValue("usage"), UsageUnit: types.StringValue("Tokens")}, "cost", types.StringNull()},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			model := tc.prior
 			if diags := mapBudgetToModel(tc.budget, &model); diags.HasError() {
 				t.Fatal(diags)
@@ -210,6 +212,7 @@ func TestSamePeriodsIgnoresScaleButNotDaysOrNumbers(t *testing.T) {
 		"null":            {null, false},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if got := samePeriods(ctx, tc.other, base); got != tc.same {
 				t.Errorf("samePeriods = %v, want %v", got, tc.same)
 			}

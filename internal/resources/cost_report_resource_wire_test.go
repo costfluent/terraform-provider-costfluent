@@ -1246,6 +1246,7 @@ func TestCostReportRemovingTheDatesKeepsTheStoredOnes(t *testing.T) {
 	}
 	for name, removed := range removals {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			api := fakeapi.New(t)
 			costReportFake(api)
 			const r = "costfluent_cost_report.r"

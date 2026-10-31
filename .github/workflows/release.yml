@@ -35,12 +35,23 @@ jobs:
 
       # The provider's tests run Terraform. With none on PATH the test framework downloads it once per
       # test, and releases have failed there on an expired HashiCorp signing key and on parallel tests
-      # executing a binary still being written. The wrapper would replace terraform with a Node script.
+      # executing a binary still being written. It is installed by checksum rather than by an action:
+      # this repository allows only the actions its release needs, and GitHub fails the whole run at
+      # startup on any other, so the tag stays public with no release.
       - name: Setup terraform
-        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
-        with:
-          terraform_version: 1.16.5
-          terraform_wrapper: false
+        env:
+          TERRAFORM_VERSION: 1.16.5
+          # The linux_amd64 archive's SHA-256 in HashiCorp's signed SHA256SUMS for this version.
+          TERRAFORM_SHA256: 2bc2fcfff033265c9e02ca0351f01794eb122f62a9b2a49a3294b9e49eaab5e4
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/terraform-archive"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+          echo "${TERRAFORM_SHA256}  $archive" | sha256sum --check --strict
+          unzip -q "$archive" terraform -d "$RUNNER_TEMP/terraform"
+          echo "$RUNNER_TEMP/terraform" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/terraform/terraform" version
 
       # The tag is cut from a reviewed merge, so this is the last chance to stop a broken build
       # before it is signed and ingested by the registry.
@@ -69,6 +80,7 @@ jobs:
       - name: Release
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
+          version: v2.19.0
           args: release --clean --release-notes ${{ runner.temp }}/notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -257,12 +257,17 @@ type ServiceCostBreakdown struct {
 	Percentage  float64 `json:"percentage"`
 }
 
-// ProviderCostBreakdown is one provider's share of the total
+// ProviderCostBreakdown is one connection's cost in the window, one entry per currency when the
+// window mixes currencies with conversion off
 type ProviderCostBreakdown struct {
 	ProviderID   string      `json:"providerId"`
 	ProviderName string      `json:"providerName"`
 	ProviderKey  ProviderKey `json:"providerKey"`
-	Cost         Decimal     `json:"cost"`
+	// Currency is the billing currency when the window mixes currencies with conversion off, which
+	// gives a connection billed in several an entry for each; nil otherwise, where CostSummary.Currency
+	// is every figure's.
+	Currency *string `json:"currency"`
+	Cost     Decimal `json:"cost"`
 }
 
 // GetCostSummary summarizes cost over a window
