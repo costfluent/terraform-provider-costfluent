@@ -4,4 +4,4 @@ package costfluent
 
 // ContractSHA256 is the SHA-256 of the Public API document this client was built against,
 // costfluent/testdata/public.v1.json.
-const ContractSHA256 = "718888ffd87ce0bd86537d3f9531fe9fbce07ac71e7be92351fecf39ce09052c"
+const ContractSHA256 = "827b9a71c4b5156754d1d672be8733b8e06ea83e76b95b37c13ef1f8be9809c9"

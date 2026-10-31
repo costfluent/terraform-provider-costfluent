@@ -27,6 +27,7 @@ func TestSameTimeZoneKeepsOnlyASpellingOfTheStoredZone(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			if got := sameTimeZone(c.configured, c.returned); !got.Equal(c.want) {
 				t.Errorf("sameTimeZone(%s, %q) = %s, want %s", c.configured, c.returned, got, c.want)
 			}

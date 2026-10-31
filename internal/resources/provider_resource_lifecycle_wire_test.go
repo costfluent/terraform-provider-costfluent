@@ -230,6 +230,7 @@ func TestProviderSettingsRemovedOrEmptiedAreClearedInPlace(t *testing.T) {
 		"emptied": "  settings    = {}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			api := fakeapi.New(t)
 			fakeProviders(api)
 			var id string

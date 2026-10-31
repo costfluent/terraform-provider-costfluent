@@ -470,6 +470,7 @@ func TestCostAlertRejectsInvalidConfigurationAtPlan(t *testing.T) {
   filter = ""`, `string length must be at least 1`},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			resource.UnitTest(t, resource.TestCase{
 				ProtoV6ProviderFactories: factories,
 				Steps: []resource.TestStep{

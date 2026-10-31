@@ -225,6 +225,95 @@ func TestBudgetUpgradeState_v021AmountIsExact(t *testing.T) {
 	}
 }
 
+// v0CadenceBudgetState is a budget as a build between v0.2.1 and schema version 1 stored it: a
+// cadence instead of a period, and the custom periods given, which no argument leaves out.
+func v0CadenceBudgetState(periods ...any) []byte {
+	state := map[string]any{
+		"id": "bgt_3", "workspace_id": "wsp_1", "name": "Custom", "amount": "2000", "currency": "EUR",
+		"start_date": "2026-10-01", "interval_count": 1, "interval_unit": "month", "state": "onTrack",
+		"status": "active", "spend_availability": "computed", "app_ids": nil, "alerts": nil,
+		"current_spend": nil, "percent_used": 0, "cost_report_id": "rpt_1", "segment_id": nil,
+		"created_at": "2026-10-01T00:00:00Z", "updated_at": nil,
+	}
+	if len(periods) == 1 {
+		state["periods"] = periods[0]
+	}
+	return budgetStateJSON(state)
+}
+
+// wantPeriods fails unless the state's periods are a list holding want, each written as
+// "start_date end_date amount" with a null amount written as "null".
+func wantPeriods(t *testing.T, attrs map[string]tftypes.Value, want ...string) {
+	t.Helper()
+	if attrs["periods"].IsNull() {
+		t.Fatalf("periods = null, want %v", want)
+	}
+	var periods []tftypes.Value
+	if err := attrs["periods"].As(&periods); err != nil {
+		t.Fatalf("periods: %v", err)
+	}
+	got := make([]string, 0, len(periods))
+	for _, period := range periods {
+		var fields map[string]tftypes.Value
+		if err := period.As(&fields); err != nil {
+			t.Fatalf("period: %v", err)
+		}
+		start, end, amount := stringAttr(t, fields, "start_date"), stringAttr(t, fields, "end_date"), stringAttr(t, fields, "amount")
+		if start == nil || end == nil {
+			t.Fatalf("period = %v, want a start and an end date", fields)
+		}
+		text := "null"
+		if amount != nil {
+			text = *amount
+		}
+		got = append(got, *start+" "+*end+" "+text)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("periods = %v, want %v", got, want)
+	}
+}
+
+// Such a build stored a period's amount as a float or as the API's decimal string; each upgrades to
+// the exact decimal string, the periods in their order with their own dates.
+func TestBudgetUpgradeState_v0PeriodsCarryOver(t *testing.T) {
+	t.Parallel()
+	attrs, _, _ := upgradeBudget(t, v0CadenceBudgetState([]any{
+		map[string]any{"start_date": "2026-10-01", "end_date": "2026-10-31", "amount": json.RawMessage(`1250.5`)},
+		map[string]any{"start_date": "2026-11-01", "end_date": "2026-11-30", "amount": "300.00000000"},
+		map[string]any{"start_date": "2026-12-01", "end_date": "2026-12-31", "amount": json.RawMessage(`1.5e3`)},
+	}))
+	wantPeriods(t, attrs,
+		"2026-10-01 2026-10-31 1250.5",
+		"2026-11-01 2026-11-30 300.00000000",
+		"2026-12-01 2026-12-31 1500",
+	)
+	wantString(t, attrs, "id", "bgt_3")
+	wantString(t, attrs, "amount", "2000")
+}
+
+func TestBudgetUpgradeState_v0PeriodWithoutAmountKeepsItsDates(t *testing.T) {
+	t.Parallel()
+	attrs, _, _ := upgradeBudget(t, v0CadenceBudgetState([]any{
+		map[string]any{"start_date": "2026-10-01", "end_date": "2026-10-31", "amount": nil},
+		map[string]any{"start_date": "2026-11-01", "end_date": "2026-11-30", "amount": "600"},
+	}))
+	wantPeriods(t, attrs, "2026-10-01 2026-10-31 null", "2026-11-01 2026-11-30 600")
+}
+
+// An empty list stays empty: a null one would make the next read treat the budget as imported and
+// plan the configured periods as a change. A budget that stored no periods keeps none.
+func TestBudgetUpgradeState_v0EmptyPeriodsStayEmpty(t *testing.T) {
+	t.Parallel()
+	attrs, _, _ := upgradeBudget(t, v0CadenceBudgetState([]any{}))
+	wantPeriods(t, attrs)
+
+	attrs, _, _ = upgradeBudget(t, v0CadenceBudgetState(nil))
+	wantNull(t, attrs, "periods")
+
+	attrs, _, _ = upgradeBudget(t, v0CadenceBudgetState())
+	wantNull(t, attrs, "periods")
+}
+
 // v0.2.1 stored the API's values as the API spelled them then; they are now camelCase, as the next
 // read would write them anyway.
 func TestBudgetUpgradeState_ValuesTakeTheWireCasing(t *testing.T) {

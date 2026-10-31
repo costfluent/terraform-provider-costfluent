@@ -786,6 +786,7 @@ func TestBudgetImportPlansNothing(t *testing.T) {
 		"report":  "  cost_report_id = \"crp_0000000000000000000001\"\n",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			api := fakeapi.New(t)
 			fakeBudgets(api)
 			config := budgetConfig(api, "Platform", "500", scope)
@@ -944,6 +945,7 @@ func TestBudgetNamesItsHistoryFloor(t *testing.T) {
 func TestBudgetImportWithAlertsOutOfOrder(t *testing.T) {
 	t.Parallel()
 	t.Run("descending is refused at plan", func(t *testing.T) {
+		t.Parallel()
 		api := fakeapi.New(t)
 		fakeBudgets(api)
 
@@ -960,6 +962,7 @@ func TestBudgetImportWithAlertsOutOfOrder(t *testing.T) {
 	})
 
 	t.Run("ascending imports with an empty plan", func(t *testing.T) {
+		t.Parallel()
 		api := fakeapi.New(t)
 		fakeBudgets(api)
 		config := budgetConfig(api, "Platform", "500", "  alerts = [{ threshold_percent = 50 }, { threshold_percent = 100 }]\n")
@@ -999,6 +1002,7 @@ func TestBudgetImportRefusesAnotherWorkspace(t *testing.T) {
 		"list refused":      {workspace: testWorkspace, fail: true, want: `(?s)Failed to import budget.*Budgets are not in this plan`},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			api := fakeapi.New(t)
 			fakeBudgets(api)
 
@@ -1053,6 +1057,7 @@ func TestBudgetImportFindsTheBudgetInItsWorkspaceList(t *testing.T) {
 		"on a later page":   {before: 100, pages: []string{"1", "2"}},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			api := fakeapi.New(t)
 			fakeBudgets(api)
 			seed(api, tc.before)
@@ -1317,6 +1322,7 @@ func TestBudgetRejectsInvalidConfigurationAtPlan(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			resource.UnitTest(t, resource.TestCase{
 				ProtoV6ProviderFactories: factories,
 				Steps: []resource.TestStep{
