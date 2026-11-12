@@ -67,12 +67,14 @@ func TestCostReportGroupBySendsEmptyListButNotUnknown(t *testing.T) {
 	}
 }
 
-// The API names a dimension in its own case; the configured spelling survives so a refresh plans
-// nothing, and a slot without a key reads back as null rather than "".
+// The API names a dimension in camelCase; the configured spelling survives so a refresh plans
+// nothing, and a slot without a key reads back as null rather than "". With no configured slot, as
+// on import, a dimension takes the spelling the group_by default and CostGroupDimensions use, and
+// one this provider does not know keeps the API's.
 func TestGroupingListKeepsConfiguredCase(t *testing.T) {
 	t.Parallel()
-	prior := groupingValue(t, [2]*string{str("serviceName"), nil}, [2]*string{str("Tag"), str("team")})
-	stored := []costfluent.Grouping{{Dimension: "ServiceName"}, {Dimension: "Tag", Key: str("team")}}
+	prior := groupingValue(t, [2]*string{str("SERVICENAME"), nil}, [2]*string{str("Tag"), str("team")})
+	stored := []costfluent.Grouping{{Dimension: "serviceName"}, {Dimension: "tag", Key: str("team")}}
 
 	got, diags := groupingList(context.Background(), prior, stored)
 	if diags.HasError() {
@@ -88,6 +90,14 @@ func TestGroupingListKeepsConfiguredCase(t *testing.T) {
 	}
 	if want := groupingValue(t, [2]*string{str("ServiceName"), nil}, [2]*string{str("Tag"), str("team")}); !fresh.Equal(want) {
 		t.Fatalf("imported group_by %s, want %s", fresh, want)
+	}
+
+	unknown, diags := groupingList(context.Background(), types.ListNull(groupingObject), []costfluent.Grouping{{Dimension: "notYetKnown"}})
+	if diags.HasError() {
+		t.Fatal(diags)
+	}
+	if want := groupingValue(t, [2]*string{str("notYetKnown"), nil}); !unknown.Equal(want) {
+		t.Fatalf("imported group_by %s, want the API's %s", unknown, want)
 	}
 }
 

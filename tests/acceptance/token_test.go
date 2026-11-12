@@ -37,11 +37,7 @@ func TestAccTokens_areTheServedSet(t *testing.T) {
 		t.Errorf("the Read and write token lacks the workspace provider capabilities: %v", readWrite.Capabilities)
 	}
 
-	key := os.Getenv("COSTFLUENT_ACC_ADMIN_API_KEY")
-	if key == "" {
-		t.Skip("COSTFLUENT_ACC_ADMIN_API_KEY holds no administration token")
-	}
-	t.Setenv("COSTFLUENT_API_KEY", key)
+	t.Setenv("COSTFLUENT_API_KEY", testAccRequireEnv(t, "COSTFLUENT_ACC_ADMIN_API_KEY", "the administration token"))
 	admin, err := testAccClient().GetMe(ctx)
 	if err != nil {
 		t.Fatalf("GET /v1/me with COSTFLUENT_ACC_ADMIN_API_KEY: %v", err)

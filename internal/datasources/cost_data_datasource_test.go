@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/fakeapi"
@@ -202,4 +203,95 @@ data "costfluent_cost_data" "c" {
 			ExpectError: regexp.MustCompile(`Failed to query cost data(.|\n)*Segment grouping needs a workspace`),
 		}},
 	})
+}
+
+// The API answers each dimension under its canonical name whatever case the slot was sent in, and
+// the data source keys every row's dimensions by the slot as the configuration writes it.
+func TestCostDataDataSourceKeysDimensionsByTheSlotAsWritten(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		groupBy  string
+		answered map[string]any
+		want     map[string]string
+		absent   []string
+	}{
+		{
+			name:     "camel case dimension and lower case tag",
+			groupBy:  `["serviceName", "tag:team"]`,
+			answered: map[string]any{"ServiceName": "Amazon EC2", "Tag:team": "platform"},
+			want:     map[string]string{"serviceName": "Amazon EC2", "tag:team": "platform"},
+			absent:   []string{"ServiceName", "Tag:team"},
+		},
+		{
+			name:     "lower case virtual tag",
+			groupBy:  `["virtualtag:vtag_x"]`,
+			answered: map[string]any{"VirtualTag:vtag_x": "production"},
+			want:     map[string]string{"virtualtag:vtag_x": "production"},
+			absent:   []string{"VirtualTag:vtag_x"},
+		},
+		{
+			name:     "tag key holding a colon and its own case",
+			groupBy:  `["tag:aws:createdBy"]`,
+			answered: map[string]any{"Tag:aws:createdBy": "alice"},
+			want:     map[string]string{"tag:aws:createdBy": "alice"},
+			absent:   []string{"Tag:aws:createdBy"},
+		},
+		{
+			name:     "canonical slot",
+			groupBy:  `["ServiceName"]`,
+			answered: map[string]any{"ServiceName": "Amazon S3"},
+			want:     map[string]string{"ServiceName": "Amazon S3"},
+		},
+		{
+			name:     "key no slot names",
+			groupBy:  `["serviceName"]`,
+			answered: map[string]any{"ServiceName": "Amazon S3", "Region": "eu-central-1"},
+			want:     map[string]string{"serviceName": "Amazon S3", "Region": "eu-central-1"},
+			absent:   []string{"ServiceName"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			api.Handle("GET /v1/costs", func(fakeapi.Request) fakeapi.Response {
+				return fakeapi.JSON(map[string]any{
+					"links": map[string]any{"self": "/v1/costs"},
+					"data": []map[string]any{{
+						"date": "2026-09-01", "cost": "1.00000000", "listCost": "1.00000000", "amortizedCost": "1.00000000", "currency": "EUR",
+						"dimensions": tc.answered,
+					}},
+					"meta": map[string]any{
+						"startDate": "2026-09-01", "endDate": "2026-09-30", "granularity": "day",
+						"totalRecords": 1, "totalCost": "1.00000000", "currency": "EUR",
+					},
+				})
+			})
+
+			checks := []resource.TestCheckFunc{
+				resource.TestCheckResourceAttr("data.costfluent_cost_data.c", "data.0.dimensions.%", strconv.Itoa(len(tc.want))),
+			}
+			for key, value := range tc.want {
+				checks = append(checks, resource.TestCheckResourceAttr("data.costfluent_cost_data.c", "data.0.dimensions."+key, value))
+			}
+			for _, key := range tc.absent {
+				checks = append(checks, resource.TestCheckNoResourceAttr("data.costfluent_cost_data.c", "data.0.dimensions."+key))
+			}
+
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{{
+					Config: api.ProviderBlock(fmt.Sprintf("workspace = %q", testWorkspace)) + fmt.Sprintf(`
+data "costfluent_cost_data" "c" {
+  start_date = "2026-09-01"
+  end_date   = "2026-09-30"
+  group_by   = %s
+}
+`, tc.groupBy),
+					Check: resource.ComposeAggregateTestCheckFunc(checks...),
+				}},
+			})
+		})
+	}
 }

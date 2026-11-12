@@ -18,10 +18,20 @@ const (
 	savedFilterStored = `[{"field":"Provider","operator":"In","values":["aws"]},` +
 		`{"field":"ServiceName","operator":"In","values":["Amazon EC2"]}]`
 	savedFilterGCPStored = `[{"field":"Provider","operator":"In","values":["gcp"]}]`
+	// savedFilterLowerCase is a JSON filter the API reads but stores as savedFilterEC2Stored.
+	savedFilterLowerCase = `[{"field":"serviceName","operator":"in","values":["Amazon EC2"]}]`
+	savedFilterEC2Stored = `[{"field":"ServiceName","operator":"In","values":["Amazon EC2"]}]`
 )
 
-// savedFilterDocuments is how the API stores a saved filter sent as CQL: as its JSON document.
-var savedFilterDocuments = map[string]string{savedFilterQuery: savedFilterStored}
+// savedFilterTranslations is what the API translates each CQL saved filter to: its JSON document.
+var savedFilterTranslations = map[string]string{savedFilterQuery: savedFilterStored}
+
+// savedFilterDocuments is how the API stores a saved filter sent as CQL, or as JSON in a spelling it
+// canonicalises: as its JSON document.
+var savedFilterDocuments = map[string]string{
+	savedFilterQuery:     savedFilterStored,
+	savedFilterLowerCase: savedFilterEC2Stored,
+}
 
 // translatedFilters serves the translate operation the provider uses to tell whether a configured
 // CQL filter means the stored JSON: each CQL filter in documents translates to its JSON document,
@@ -37,9 +47,9 @@ func translatedFilters(api *fakeapi.Server, documents map[string]string) {
 	})
 }
 
-// storedFilter is a sent filter as the API stores and answers it: a CQL filter in documents as its
-// JSON document, a JSON document re-serialised, which here means in sorted key order, and no filter
-// as none.
+// storedFilter is a sent filter as the API stores and answers it: a filter in documents as its JSON
+// document, any other JSON document re-serialised, which here means in sorted key order, and no
+// filter as none.
 func storedFilter(documents map[string]string, sent any) any {
 	text, ok := sent.(string)
 	if !ok {
@@ -86,7 +96,7 @@ func savedFilterFake(api *fakeapi.Server) {
 			}
 		},
 	})
-	translatedFilters(api, savedFilterDocuments)
+	translatedFilters(api, savedFilterTranslations)
 }
 
 func savedFilterConfig(api *fakeapi.Server, title, extra string) string {
@@ -354,6 +364,31 @@ func TestSavedFilterJSONFilterInAnotherKeyOrderPlansNoChange(t *testing.T) {
 					resource.TestCheckResourceAttr("costfluent_saved_filter.f", "filter", reordered),
 					savedFilterStoredAs(t, api, savedFilterStored),
 				),
+			},
+		},
+	})
+}
+
+// The API reads a JSON filter's names in any case and answers its canonical document, which the
+// configured text still means, so the create keeps the configuration and a later plan shows nothing.
+func TestSavedFilterJSONFilterTheAPICanonicalizesPlansNoChange(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	savedFilterFake(api)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: savedFilterConfigWith(api, "EC2", savedFilterLowerCase, ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_saved_filter.f", "filter", savedFilterLowerCase),
+					savedFilterStoredAs(t, api, savedFilterEC2Stored),
+				),
+			},
+			{
+				Config:   savedFilterConfigWith(api, "EC2", savedFilterLowerCase, ""),
+				PlanOnly: true,
 			},
 		},
 	})

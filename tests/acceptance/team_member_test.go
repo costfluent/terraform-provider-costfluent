@@ -3,7 +3,6 @@ package acceptance
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"slices"
 	"testing"
@@ -20,10 +19,7 @@ var userIDPattern = regexp.MustCompile(`^usr_[A-Za-z0-9_-]{22}$`)
 // imports, and leaves when the membership is destroyed.
 func TestAccTeamMember_lookedUpByEmail(t *testing.T) {
 	testAccUseAdminKey(t)
-	email := os.Getenv("COSTFLUENT_ACC_USER_EMAIL")
-	if email == "" {
-		t.Skip("COSTFLUENT_ACC_USER_EMAIL names no member of the acceptance organization")
-	}
+	email := testAccRequireEnv(t, "COSTFLUENT_ACC_USER_EMAIL", "the email of a member of the acceptance organization")
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
 	resource.Test(t, resource.TestCase{

@@ -93,7 +93,7 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Sensitive:   true,
 				ElementType: types.StringType,
 				Description: "Provider credentials: role_arn for AWS; tenant, appId and password for Azure; billing_account_id, project_id and bigquery_dataset for GCP; " +
-					"admin_key for Anthropic and OpenAI. Sensitive hides them from plan output, but the Terraform state holds them in plaintext, " +
+					"admin_key for Anthropic, OpenAI and Cursor. Sensitive hides them from plan output, but the Terraform state holds them in plaintext, " +
 					"so keep state in an encrypted backend with restricted access.",
 			},
 			"settings": schema.MapAttribute{

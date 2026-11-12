@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -36,7 +37,8 @@ func subscriptionZone(v any) any {
 
 // subscriptionFake serves /v1/cost-report-subscriptions as the API does: the create answers the
 // id, an update is a PATCH naming the workspace in its body and answers the subscription, every
-// write is versioned, and the workspace's zone and 9 o'clock fill what a create leaves out.
+// write is versioned, each app is stored once, and the workspace's zone and 9 o'clock fill what a
+// create leaves out.
 func subscriptionFake(api *fakeapi.Server) {
 	const path = "/v1/cost-report-subscriptions"
 	api.Collection(path, fakeapi.Collection{
@@ -48,7 +50,7 @@ func subscriptionFake(api *fakeapi.Server) {
 		Create: func(body map[string]any) map[string]any {
 			obj := map[string]any{
 				"costReportId": body["costReportId"], "name": body["name"], "scheduleType": body["scheduleType"],
-				"deliveryHour": float64(9), "timeZone": "Europe/Berlin", "appIds": body["appIds"], "isActive": true,
+				"deliveryHour": float64(9), "timeZone": "Europe/Berlin", "appIds": distinctApps(body["appIds"]), "isActive": true,
 				"createdAt": "2026-10-01T09:30:00Z",
 			}
 			if hour, ok := body["deliveryHour"]; ok {
@@ -68,6 +70,9 @@ func subscriptionFake(api *fakeapi.Server) {
 			}
 			if zone, ok := body["timeZone"]; ok {
 				obj["timeZone"] = subscriptionZone(zone)
+			}
+			if apps, ok := body["appIds"]; ok {
+				obj["appIds"] = distinctApps(apps)
 			}
 		},
 	})
@@ -89,6 +94,21 @@ func subscriptionFake(api *fakeapi.Server) {
 	}
 	api.Handle("POST "+path+"/{id}/activate", toggle(true))
 	api.Handle("POST "+path+"/{id}/deactivate", toggle(false))
+}
+
+// distinctApps is a list of app IDs as the API stores it: each once, in the order first sent.
+func distinctApps(sent any) any {
+	apps, ok := sent.([]any)
+	if !ok {
+		return sent
+	}
+	stored := []any{}
+	for _, app := range apps {
+		if !slices.Contains(stored, app) {
+			stored = append(stored, app)
+		}
+	}
+	return stored
 }
 
 func subscriptionConfig(api *fakeapi.Server, extra string) string {
@@ -303,6 +323,39 @@ resource "costfluent_cost_report_subscription" "s" {
 				PlanOnly:    true,
 				ExpectError: regexp.MustCompile(`at least 1`),
 			},
+		},
+	})
+}
+
+// The API stores a repeated app once, so app_ids naming one twice could never apply as configured: a
+// plan refuses it, naming the attribute, before any request reaches the API.
+func TestCostReportSubscriptionRepeatedAppIsRefusedAtPlan(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	subscriptionFake(api)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: api.ProviderBlock() + fmt.Sprintf(`
+resource "costfluent_cost_report_subscription" "s" {
+  workspace_id   = %q
+  cost_report_id = %q
+  name           = "Weekly spend"
+  schedule_type  = "weekly"
+  app_ids        = [%q, "app_0000000000000000000002", %q]
+}
+`, testWorkspace, subscriptionReport, subscriptionApp, subscriptionApp),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`(?s)Duplicate List Value.*app_ids`),
+			},
+		},
+		CheckDestroy: func(*terraform.State) error {
+			if sent := api.Requests("", "/v1/cost-report-subscriptions"); len(sent) != 0 {
+				return fmt.Errorf("a refused plan reached the API: %v", sent)
+			}
+			return nil
 		},
 	})
 }

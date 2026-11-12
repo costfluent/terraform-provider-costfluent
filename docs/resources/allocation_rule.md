@@ -56,14 +56,14 @@ resource "costfluent_allocation_rule" "checkout_by_resource_group" {
 ### Required
 
 - `filter` (String) The cost this rule claims, as the cost filter's JSON document (build it with jsonencode) or as CQL text, as costfluent_cost_report takes it. It must constrain at least one dimension and may not read a virtual tag.
-- `name` (String) Rule name. Documentation only; it moves no cost.
+- `name` (String) Rule name, 1 to 200 characters, not blank. Documentation only; it moves no cost.
 - `segment_id` (String) Segment token this rule assigns cost to.
 - `workspace_id` (String) Workspace token the rule belongs to.
 
 ### Optional
 
 - `is_enabled` (Boolean) Whether the rule claims cost. A disabled rule affects no total, so this is how a mapping is staged before it moves anyone's numbers.
-- `priority` (Number) Evaluation order; lower wins. Ties break by creation time, so the order is total and stable. Leave gaps: inserting a rule ahead of another then needs no renumbering.
+- `priority` (Number) Evaluation order, from -1000000 to 1000000; lower wins. Ties break by creation time, so the order is total and stable. Leave gaps: inserting a rule ahead of another then needs no renumbering.
 
 ### Read-Only
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/fakeapi"
@@ -369,6 +370,81 @@ func TestAllocationRuleDeletedOutsideTerraformIsRecreated(t *testing.T) {
 	})
 }
 
+// shiftPastTheCursor makes the next listing of collection lose a row between its first and second
+// page: just before page 2 is served, first is deleted, so every later row moves one place back and
+// the row that opened page 2 lands on page 1, which was already read.
+func shiftPastTheCursor(api *fakeapi.Server, collection, first string) {
+	api.BeforeNext(http.MethodGet, collection, func() {})
+	api.BeforeNext(http.MethodGet, collection, func() { api.Remove(collection, first) })
+}
+
+// seedAllocationRules stores n rules of another team in the test workspace and returns their IDs,
+// in the order the listing serves them, ahead of any rule Terraform creates afterwards.
+func seedAllocationRules(api *fakeapi.Server, n int) []string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = api.NextID("alr_")
+		api.PutIn("/v1/allocation/rules", testWorkspace, ids[i], map[string]any{
+			"name": "Other", "priority": 0, "filter": allocationRuleRDSStored, "costKind": "Direct",
+			"segmentId": allocationRuleSegment, "isEnabled": true, "createdAt": "2026-10-01T12:00:00Z",
+		})
+	}
+	return ids
+}
+
+func TestAllocationRuleShiftedOutOfAPageDuringRefreshStaysInState(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	allocationRuleFake(api)
+	others := seedAllocationRules(api, 100)
+	config := allocationRuleConfig(api, allocationRuleEC2Query, "")
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: config},
+			{
+				PreConfig: func() { shiftPastTheCursor(api, "/v1/allocation/rules", others[0]) },
+				Config:    config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: func(*terraform.State) error {
+					if n := len(api.IDs("/v1/allocation/rules")); n != 100 {
+						return fmt.Errorf("allocation rules = %d, want the 100 left after the delete", n)
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+func TestAllocationRuleConfirmationListingFailureSurfacesTheAPIError(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	allocationRuleFake(api)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: allocationRuleConfig(api, allocationRuleEC2Query, "")},
+			{
+				PreConfig: func() {
+					api.Remove("/v1/allocation/rules", allocationRuleOnlyID(t, api))
+					api.BeforeNext(http.MethodGet, "/v1/allocation/rules", func() {
+						api.FailNext(http.MethodGet, "/v1/allocation/rules",
+							fakeapi.Problem(http.StatusForbidden, "Forbidden", "Cost allocation is not on this plan"))
+					})
+				},
+				Config:      allocationRuleConfig(api, allocationRuleEC2Query, ""),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`Failed to read allocation rule(.|\n)*Cost allocation is not on this plan`),
+			},
+		},
+	})
+}
+
 func TestAllocationRuleUpdateFailureSurfacesTheAPIError(t *testing.T) {
 	t.Parallel()
 	api := fakeapi.New(t)
@@ -414,4 +490,62 @@ resource "costfluent_allocation_rule" "r" {
 			},
 		},
 	})
+}
+
+// The schema holds a rule's name and priority to the API's limits: a value past one is refused at
+// plan with nothing sent, and a value at either end of a limit plans.
+func TestAllocationRuleRefusesANameOrPriorityPastTheAPIsLimitAtPlan(t *testing.T) {
+	t.Parallel()
+	config := func(name string, priority int) string {
+		return fmt.Sprintf(`
+resource "costfluent_allocation_rule" "r" {
+  workspace_id = %q
+  name         = %q
+  priority     = %d
+  filter       = %q
+  segment_id   = %q
+}
+`, testWorkspace, name, priority, allocationRuleEC2Query, allocationRuleSegment)
+	}
+	// The API counts UTF-16 code units: "é" is two bytes and one unit, "😀" one rune and two units.
+	atLimit := strings.Repeat("a", 200)
+	nameLength := func(got int) string {
+		return fmt.Sprintf(`name\s+must\s+be\s+1\s+to\s+200\s+characters\s+\(UTF-16\s+code\s+units\),\s+got:\s+%d`, got)
+	}
+
+	for name, tc := range map[string]struct{ config, want string }{
+		"name past the limit":                 {config(strings.Repeat("a", 201), 10), nameLength(201)},
+		"name past the limit in UTF-16 units": {config(strings.Repeat("a", 199)+"😀", 10), nameLength(201)},
+		"empty name":                          {config("", 10), nameLength(0)},
+		"blank name":                          {config("   ", 10), `name\s+is\s+blank`},
+		"name of Unicode spaces":              {config("\u00a0\u3000", 10), `name\s+is\s+blank`},
+		"accented name under the limit":       {config(strings.Repeat("é", 101), 10), ``},
+		"astral name at the limit":            {config(strings.Repeat("a", 198)+"😀", 10), ``},
+		"priority above the limit":            {config("Checkout compute", 1_000_001), `priority value must be between -1000000 and 1000000, got: 1000001`},
+		"priority below the limit":            {config("Checkout compute", -1_000_001), `priority value must be between -1000000 and 1000000, got: -1000001`},
+		"highest priority":                    {config(atLimit, 1_000_000), ``},
+		"lowest priority":                     {config(atLimit, -1_000_000), ``},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			allocationRuleFake(api)
+
+			step := resource.TestStep{Config: api.ProviderBlock() + tc.config, PlanOnly: true}
+			if tc.want == "" {
+				step.ExpectNonEmptyPlan = true
+			} else {
+				step.ExpectError = regexp.MustCompile(tc.want)
+			}
+			resource.UnitTest(t, resource.TestCase{ProtoV6ProviderFactories: factories, Steps: []resource.TestStep{step}})
+			// A plan that passes validation reads the token's capabilities; one refused stops first.
+			sent := api.Requests("", "")
+			if tc.want == "" {
+				sent = api.Requests(http.MethodPost, "/v1/allocation/rules")
+			}
+			if len(sent) != 0 {
+				t.Fatalf("plan sent %s %s, want none", sent[0].Method, sent[0].Path)
+			}
+		})
+	}
 }

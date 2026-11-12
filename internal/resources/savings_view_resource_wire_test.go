@@ -38,10 +38,10 @@ func savingsViewFake(api *fakeapi.Server) {
 }
 
 // storeSavingsView writes a create or update body into the stored view as the API answers it: the
-// enums it reads in any case in camelCase, the minimum at eight decimals, and a filter the body
-// leaves out as none.
+// title trimmed, the enums it reads in any case in camelCase, the minimum at eight decimals, and a
+// filter the body leaves out as none.
 func storeSavingsView(obj, body map[string]any) {
-	obj["title"] = body["title"]
+	obj["title"] = strings.TrimSpace(fmt.Sprint(body["title"]))
 	obj["tab"] = camelCase(body["tab"])
 	obj["source"] = camelCase(body["source"])
 	obj["kind"] = camelCase(body["kind"])
@@ -402,6 +402,48 @@ func TestSavingsViewReadFailureSurfacesTheAPIError(t *testing.T) {
 			},
 		},
 	})
+}
+
+// The API trims a title and answers the trimmed one, so a configured title padded on either side, as
+// a heredoc's trailing newline pads it, applies as configured on create and rename and plans nothing
+// after. A title renamed in the app differs by more than padding and is read back as stored.
+func TestSavingsViewPaddedTitleKeepsTheConfiguredSpelling(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	savingsViewFake(api)
+	const address = "costfluent_savings_view.v"
+	steps := []resource.TestStep{}
+	for _, title := range []string{" Idle VMs ", "Idle VMs, EU\n", "  Idle VMs, US"} {
+		steps = append(steps,
+			resource.TestStep{
+				Config: savingsViewConfig(api, title, ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(address, "title", title),
+					func(*terraform.State) error {
+						stored, _ := api.Get(savingsViewPath, savingsViewOnlyID(t, api))
+						if want := strings.TrimSpace(title); stored["title"] != want {
+							return fmt.Errorf("stored title = %q, want %q", stored["title"], want)
+						}
+						return nil
+					},
+				),
+			},
+			resource.TestStep{Config: savingsViewConfig(api, title, ""), PlanOnly: true},
+		)
+	}
+	steps = append(steps, resource.TestStep{
+		PreConfig: func() {
+			api.Update(savingsViewPath, savingsViewOnlyID(t, api), func(obj map[string]any) { obj["title"] = "Idle VMs, US and EU" })
+		},
+		RefreshState:       true,
+		Check:              resource.TestCheckResourceAttr(address, "title", "Idle VMs, US and EU"),
+		ExpectNonEmptyPlan: true,
+		RefreshPlanChecks: resource.RefreshPlanChecks{PostRefresh: []plancheck.PlanCheck{
+			plancheck.ExpectResourceAction(address, plancheck.ResourceActionUpdate),
+		}},
+	})
+
+	resource.UnitTest(t, resource.TestCase{ProtoV6ProviderFactories: factories, Steps: steps})
 }
 
 func TestSavingsViewRejectsInvalidConfigurationAtPlan(t *testing.T) {

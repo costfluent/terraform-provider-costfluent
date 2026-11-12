@@ -137,15 +137,15 @@ resource "costfluent_cost_report" "checkout_team" {
 ### Optional
 
 - `chart_axis` (String) What the chart sets along its horizontal axis: `date`, or `group`, the report's grouping, which a `bar` or `stackedBar` chart of a grouped report in a bin other than `cumulative` draws. Left out, the report keeps its axis while its chart can draw it and draws by date otherwise.
-- `chart_type` (String) How the report is drawn.
+- `chart_type` (String) How the report is drawn. Left out of a new report, it is `stackedBar`.
 - `date_bin` (String) Bucket size the cost is grouped into over time.
-- `date_interval` (String) Relative window the report covers.
-- `end_date` (String) Inclusive last day, for an absolute window. Removed, the report keeps its stored date.
+- `date_interval` (String) Window the report covers, such as `last30Days`, `last3CompleteMonths` (the three whole months before this one), `throughNext3Months` (the first of this month to the last day of the third month after it; with `settings.show_forecast` on, the forecast fills the days to come) or `custom` (start_date to end_date). https://docs.costfluent.com/api/cost-reports lists every value.
+- `end_date` (String) Inclusive last day, for a `custom` window. Removed from the configuration, it is cleared while `date_interval` is a relative window and kept while it is `custom`, which needs both dates. A report moved to a relative window in the console keeps its stored dates, so importing it with a configuration that sets none plans clearing them.
 - `filter` (String) The cost filter as its JSON document or as CQL text, such as `costs.provider = 'aws' OR costs.region LIKE 'eu-%'`. The configured text is kept while it means the filter the API stores. Omit for a report with no filter.
 - `folder_id` (String) Folder token the report is filed under. Removing it takes the report out of its folder.
-- `group_by` (Attributes List) Up to three slots the report breaks its window down by, outermost first. Omitted, the report groups by ServiceName. Set to `[]` for a single total. (see [below for nested schema](#nestedatt--group_by))
-- `settings` (Attributes) What the report counts. `measure` chooses what it charts; each other setting changes the money. A setting left out takes the workspace's report default on create and keeps the report's own on update, and a comparison window set in the app is kept. (see [below for nested schema](#nestedatt--settings))
-- `start_date` (String) Inclusive first day, for an absolute window. Removed, the report keeps its stored date.
+- `group_by` (Attributes List) Up to 3 slots the report breaks its window down by, outermost first, no slot twice. Omitted, the report groups by ServiceName. Set to `[]` for a single total. (see [below for nested schema](#nestedatt--group_by))
+- `settings` (Attributes) What the report counts and what it charts beside it. `amortize`, `include_credits`, `include_refunds` and `include_tax` decide which money the report counts; `measure` chooses whether it charts that cost, a usage or a count; `show_forecast`, `compare_to_last_period` and `comparison_mode` draw a forecast and a comparison beside it, and the `unit_cost_*` settings a unit cost, none of which changes the money counted. A setting left out takes the workspace's report default on create and keeps the report's own on update, and a comparison window set in the app is kept. (see [below for nested schema](#nestedatt--settings))
+- `start_date` (String) Inclusive first day, for a `custom` window. Removed from the configuration, it is cleared while `date_interval` is a relative window and kept while it is `custom`, which needs both dates. A report moved to a relative window in the console keeps its stored dates, so importing it with a configuration that sets none plans clearing them.
 
 ### Read-Only
 
@@ -162,7 +162,7 @@ Required:
 
 Optional:
 
-- `key` (String) What the dimension needs to name a group: the tag key for Tag, the virtual tag token for VirtualTag. Omit for the other dimensions.
+- `key` (String) What the dimension needs to name a group, and only Tag and VirtualTag take one: the tag key, at most 128 characters, for Tag; the `id` of a `costfluent_virtual_tag`, not its `key`, for VirtualTag.
 
 
 <a id="nestedatt--settings"></a>
@@ -172,13 +172,14 @@ Optional:
 
 - `amortize` (Boolean) Show amortized rather than actual cost. The two are different measurements and are never mixed in one total.
 - `compare_to_last_period` (Boolean)
+- `comparison_mode` (String) What `compare_to_last_period` compares the report with: `previousPeriod`, the period before the report's window, or `samePeriodLastYear`, the same days a year earlier (by day a calendar year back, 29 February to the 28th; by week 52 weeks back, so weekdays pair; by month and quarter twelve months back). A comparison window set in the app wins over it on the report's own range; the mode decides under every dashboard range. Left out, a new report compares with `previousPeriod` and an update keeps the report's own.
 - `include_credits` (Boolean)
 - `include_refunds` (Boolean)
 - `include_tax` (Boolean)
 - `measure` (String) What the report charts: `cost`, `usage` (the consumed quantity, each unit apart) or `count` (distinct resources). A count has no `Cumulative` date bin. Defaults to `cost`.
 - `show_forecast` (Boolean)
 - `unit_cost_calculation` (String) How the unit cost metric is charted: `perUnit`, each bin's cost or usage over the metric's amount; `grossMargin`, revenue less cost over revenue as a fraction, on the `cost` measure and a metric whose unit is the report's currency code; or `metricValue`, the metric's own amount, on any measure. Needs `unit_cost_metric_id`. Left out, a new report charts `perUnit` and an update keeps the report's own.
-- `unit_cost_label_filter` (Attributes List) Which of the unit cost metric's values the report counts: a value counts when its label in every listed column is one of that column's values. Each `key` is a label column of the metric, listed once. Needs `unit_cost_metric_id`; unset counts every value. (see [below for nested schema](#nestedatt--settings--unit_cost_label_filter))
+- `unit_cost_label_filter` (Attributes List) Which of the unit cost metric's values the report counts: a value counts when its label in every listed column is one of that column's values. Each `key` is a label column of the metric, listed once ignoring case, in at most 5 conditions. Needs `unit_cost_metric_id`; unset counts every value. (see [below for nested schema](#nestedatt--settings--unit_cost_label_filter))
 - `unit_cost_metric_id` (String) A `costfluent_business_metric` of the report's workspace to chart beside the report, bin by bin, as `unit_cost_calculation` says. Needs a date bin other than `Cumulative` and a measure the calculation charts. Unset charts the measure alone and returns the calculation and scale to `perUnit` and `1`.
 - `unit_cost_scale` (Number) How many units of the metric a `perUnit` figure is charted per: `1`, `100`, `1000`, `1000000` or `1000000000`. Other than `1` only with `perUnit` and `unit_cost_metric_id`. Left out, a new report charts per `1` and an update keeps the report's own.
 
@@ -187,8 +188,8 @@ Optional:
 
 Required:
 
-- `key` (String) A label column of the metric.
-- `values` (List of String) The labels of that column the unit cost counts, any one of them.
+- `key` (String) A label column of the metric, at most 100 characters.
+- `values` (List of String) The labels of that column the unit cost counts, any one of them: at most 100 different ones, each at most 100 characters.
 
 ## Import
 

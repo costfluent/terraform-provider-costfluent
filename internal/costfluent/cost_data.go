@@ -9,7 +9,7 @@ import (
 
 // CostFilterOptions are the scoping options the cost data and cost summary queries share. Dates
 // are calendar days, YYYY-MM-DD, and both are required. A nil switch keeps the API's default:
-// credits excluded, refunds and tax included, amortized cost.
+// credits and refunds excluded, tax included, amortized cost.
 type CostFilterOptions struct {
 	StartDate string
 	EndDate   string
@@ -146,13 +146,16 @@ type CostDataPoint struct {
 
 // CostDataMeta describes the query that was answered
 type CostDataMeta struct {
-	StartDate    string                `json:"startDate"`
-	EndDate      string                `json:"endDate"`
-	Granularity  string                `json:"granularity"`
-	Measure      string                `json:"measure,omitempty"`
-	TotalRecords int                   `json:"totalRecords"`
-	TotalCost    Decimal               `json:"totalCost"`
-	Currency     string                `json:"currency"`
+	StartDate    string `json:"startDate"`
+	EndDate      string `json:"endDate"`
+	Granularity  string `json:"granularity"`
+	Measure      string `json:"measure,omitempty"`
+	TotalRecords int    `json:"totalRecords"`
+	// TotalCost and Currency are unset when the window mixes currencies without conversion, and
+	// left out when written rather than written as an empty total; the totals are then read from
+	// Presentation.TotalsByCurrency.
+	TotalCost    Decimal               `json:"totalCost,omitempty"`
+	Currency     string                `json:"currency,omitempty"`
 	Presentation *CurrencyPresentation `json:"presentation,omitempty"`
 
 	// CommitmentDiscounts is how the amortized figures placed commitment discounts.

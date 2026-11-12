@@ -85,6 +85,9 @@ var segmentLabel = regexp.MustCompile(`^\S(?s:.*\S)?$`)
 // segmentSplitMaxTargets is the API's limit on the targets one split names.
 const segmentSplitMaxTargets = 100
 
+// segmentMaxTextLength is the API's limit on a segment's team label, product, cost centre and label.
+const segmentMaxTextLength = 200
+
 func NewSegmentResource() resource.Resource {
 	return &SegmentResource{managed{name: "segment", needs: Needs{
 		Create: []costfluent.Capability{costfluent.CapabilityManageCostAllocation},
@@ -127,7 +130,10 @@ func (r *SegmentResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			},
 			"team_label": schema.StringAttribute{
 				Optional:    true,
-				Description: "Segment name when it is a label rather than a team row.",
+				Description: "Segment name when it is a label rather than a team row, at most 200 characters.",
+				Validators: []validator.String{
+					validators.UTF16LengthAtMost(segmentMaxTextLength),
+				},
 			},
 			"team_name": schema.StringAttribute{
 				Computed:    true,
@@ -135,13 +141,19 @@ func (r *SegmentResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			},
 			"product": schema.StringAttribute{
 				Optional: true,
-				Description: "Product the segment is responsible for. Required on a direct segment; the API " +
-					"stores none for a shared one.",
+				Description: "Product the segment is responsible for, at most 200 characters. Required on a " +
+					"direct segment; the API stores none for a shared one.",
+				Validators: []validator.String{
+					validators.UTF16LengthAtMost(segmentMaxTextLength),
+				},
 			},
 			"cost_centre": schema.StringAttribute{
 				Optional: true,
-				Description: "Cost centre the segment charges to. Required on a direct segment; the API " +
-					"stores none for a shared one.",
+				Description: "Cost centre the segment charges to, at most 200 characters. Required on a " +
+					"direct segment; the API stores none for a shared one.",
+				Validators: []validator.String{
+					validators.UTF16LengthAtMost(segmentMaxTextLength),
+				},
 			},
 			"is_shared": schema.BoolAttribute{
 				Optional: true,
@@ -158,10 +170,10 @@ func (r *SegmentResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			},
 			"label": schema.StringAttribute{
 				Optional: true,
-				Description: "A shared segment's label. A workspace holds one shared segment per label, " +
-					"compared ignoring case, and one without. Only a shared segment takes one.",
+				Description: "A shared segment's label, at most 200 characters. A workspace holds one shared " +
+					"segment per label, compared ignoring case, and one without. Only a shared segment takes one.",
 				Validators: []validator.String{
-					stringvalidator.LengthAtMost(200),
+					validators.UTF16LengthAtMost(segmentMaxTextLength),
 					stringvalidator.RegexMatches(segmentLabel,
 						"must not be empty or start or end with a space; leave it unset for the unlabelled shared segment"),
 				},
@@ -396,8 +408,11 @@ func (r *SegmentResource) Read(ctx context.Context, req resource.ReadRequest, re
 
 	// There is no single-segment read on the contract, and adding one just for Terraform would be a
 	// route with one caller. The listing is already scoped to the workspace, so finding the row in
-	// it costs one request either way.
-	segments, err := r.client.ListSegments(ctx, state.WorkspaceID.ValueString())
+	// it costs one listing while the segment exists.
+	id := state.ID.ValueString()
+	segment, err := findListed(func() ([]costfluent.Segment, error) {
+		return r.client.ListSegments(ctx, state.WorkspaceID.ValueString())
+	}, func(segment costfluent.Segment) bool { return segment.ID == id })
 	if costfluent.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -406,17 +421,14 @@ func (r *SegmentResource) Read(ctx context.Context, req resource.ReadRequest, re
 		apidiag.AddError(&resp.Diagnostics, "Failed to read segment", err)
 		return
 	}
-
-	for i := range segments {
-		if segments[i].ID == state.ID.ValueString() {
-			mapSegmentToModel(&segments[i], &state)
-			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
-			resp.Diagnostics.Append(keepETagWhileUnchanged(ctx, resp.Private, resp.State.Raw.Equal(req.State.Raw))...)
-			return
-		}
+	if segment == nil {
+		resp.State.RemoveResource(ctx)
+		return
 	}
 
-	resp.State.RemoveResource(ctx)
+	mapSegmentToModel(segment, &state)
+	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+	resp.Diagnostics.Append(keepETagWhileUnchanged(ctx, resp.Private, resp.State.Raw.Equal(req.State.Raw))...)
 }
 
 func (r *SegmentResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {

@@ -68,7 +68,8 @@ func (a *teamAccess) grantView(team, workspace string) map[string]any {
 
 // teamFake serves /v1/teams with TeamResponse on create, list and update, TeamDetailResponse on a
 // read, and the workspace access of each team under /v1/teams/{id}/workspaces, with its default
-// dashboard, which a level change keeps and removing the grant ends.
+// dashboard, which a level change keeps and removing the grant ends. Like the API, it lists the
+// grants only to a token carrying viewWorkspace, and none to one without.
 func teamFake(api *fakeapi.Server) *teamAccess {
 	access := &teamAccess{levels: map[string]map[string]string{}, defaults: map[string]map[string]string{}}
 	api.Collection("/v1/teams", fakeapi.Collection{
@@ -92,8 +93,10 @@ func teamFake(api *fakeapi.Server) *teamAccess {
 		access.mu.Lock()
 		defer access.mu.Unlock()
 		items := []any{}
-		for workspace := range access.levels[r.PathValue("id")] {
-			items = append(items, access.grantView(r.PathValue("id"), workspace))
+		if api.Carries(costfluent.CapabilityViewWorkspace) {
+			for workspace := range access.levels[r.PathValue("id")] {
+				items = append(items, access.grantView(r.PathValue("id"), workspace))
+			}
 		}
 		return fakeapi.Page(r, "/v1/teams/"+r.PathValue("id")+"/workspaces", items)
 	})
@@ -249,6 +252,150 @@ func TestTeamWorkspaceAccessRemovedOutsideTerraformIsSetAgain(t *testing.T) {
 	})
 }
 
+// grantConfig is a grant of level on a team Terraform does not manage, so removing or destroying
+// it reaches only the grant and the team outlives it.
+func grantConfig(api *fakeapi.Server, team, level string) string {
+	return api.ProviderBlock() + fmt.Sprintf(`
+resource "costfluent_team_workspace_access" "a" {
+  team_id      = %q
+  workspace_id = %q
+  access_level = %q
+}
+`, team, teamWorkspace, level)
+}
+
+// writes is every request but a read the fake has received, as "METHOD path".
+func writes(api *fakeapi.Server) []string {
+	var out []string
+	for _, r := range api.Requests("", "") {
+		if r.Method != http.MethodGet {
+			out = append(out, r.Method+" "+r.Path)
+		}
+	}
+	return out
+}
+
+// cannotReadGrants matches the refresh refused because the token cannot see a team's grants.
+var cannotReadGrants = lacksCapability("Failed to read team workspace access", costfluent.CapabilityViewWorkspace)
+
+// A token without viewWorkspace is listed none of a team's grants, so a grant missing from the list
+// is not one removed: the refresh fails naming the capability, writes nothing and keeps the grant.
+func TestTeamWorkspaceAccessIsKeptWhenTheTokenCannotViewWorkspaces(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	access := teamFake(api)
+	var before int
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: teamConfig(api, "Platform", "canEdit")},
+			{
+				PreConfig: func() {
+					before = len(writes(api))
+					api.Me(without(costfluent.CapabilityViewWorkspace))
+				},
+				Config:      teamConfig(api, "Platform", "canEdit"),
+				PlanOnly:    true,
+				ExpectError: cannotReadGrants,
+			},
+			{
+				Config:      teamConfig(api, "Platform", "canEdit"),
+				ExpectError: cannotReadGrants,
+			},
+			{
+				PreConfig: func() {
+					if sent := writes(api)[before:]; len(sent) != 0 {
+						t.Errorf("the API received %v although the refresh failed", sent)
+					}
+					if got := access.level(teamOnlyID(t, api), teamWorkspace); got != "canEdit" {
+						t.Errorf("access = %q, want canEdit kept", got)
+					}
+					api.Me(without())
+				},
+				Config:   teamConfig(api, "Platform", "canEdit"),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// Removing or destroying a grant under a token without viewWorkspace fails naming it, rather than
+// succeeding without a DELETE while the team keeps its access; with the capability, both revoke.
+func TestTeamWorkspaceAccessRemovedUnderATokenWithoutViewWorkspaceIsNotSilentlyKept(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	access := teamFake(api)
+	team := api.NextID("team_")
+	api.Put("/v1/teams", team, map[string]any{"name": "Platform", "isSystemTeam": false, "memberCount": 0})
+	grant := "/v1/teams/" + team + "/workspaces/" + teamWorkspace
+	held := func(deletes int, level string) error {
+		if sent := len(api.Requests(http.MethodDelete, grant)); sent != deletes {
+			return fmt.Errorf("DELETE %s sent %d times, want %d", grant, sent, deletes)
+		}
+		if got := access.level(team, teamWorkspace); got != level {
+			return fmt.Errorf("access = %q, want %q", got, level)
+		}
+		return nil
+	}
+	narrow := func() { api.Me(without(costfluent.CapabilityViewWorkspace)) }
+	// wide checks the narrow step kept the grant, then goes back to a token carrying viewWorkspace.
+	wide := func(deletes int, level string) func() {
+		return func() {
+			if err := held(deletes, level); err != nil {
+				t.Error(err)
+			}
+			api.Me(without())
+		}
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: grantConfig(api, team, "canEdit")},
+			{PreConfig: narrow, Config: api.ProviderBlock(), ExpectError: cannotReadGrants},
+			{
+				PreConfig: wide(0, "canEdit"),
+				Config:    api.ProviderBlock(),
+				Check:     func(*terraform.State) error { return held(1, "") },
+			},
+			{Config: grantConfig(api, team, "canView")},
+			{PreConfig: narrow, Config: grantConfig(api, team, "canView"), Destroy: true, ExpectError: cannotReadGrants},
+			{PreConfig: wide(1, "canView"), Config: grantConfig(api, team, "canView"), PlanOnly: true},
+		},
+		CheckDestroy: func(*terraform.State) error { return held(2, "") },
+	})
+}
+
+// Importing a grant under a token without viewWorkspace names the capability, rather than calling
+// a grant the API holds a non-existent remote object.
+func TestTeamWorkspaceAccessImportUnderATokenWithoutViewWorkspaceNamesIt(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	teamFake(api)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: teamConfig(api, "Platform", "canView")},
+			{
+				PreConfig:    func() { api.Me(without(costfluent.CapabilityViewWorkspace)) },
+				ResourceName: "costfluent_team_workspace_access.a",
+				ImportState:  true,
+				ImportStateIdFunc: func(*terraform.State) (string, error) {
+					return teamOnlyID(t, api) + ":" + teamWorkspace, nil
+				},
+				ExpectError: cannotReadGrants,
+			},
+			{
+				PreConfig: func() { api.Me(without()) },
+				Config:    teamConfig(api, "Platform", "canView"),
+				PlanOnly:  true,
+			},
+		},
+	})
+}
+
 // teamDefaultDashboardConfig is a team granted level on the workspace, with dashboard as its default
 // there when not empty.
 func teamDefaultDashboardConfig(api *fakeapi.Server, level, dashboard string) string {
@@ -378,7 +525,7 @@ func TestTeamWorkspaceAccessDefaultDashboardFailureKeepsTheGrant(t *testing.T) {
 	const missing = "dsh_0000000000000000000009"
 	failNext := func() {
 		api.FailNext(http.MethodPut, "/v1/teams/"+teamOnlyID(t, api)+"/workspaces/"+teamWorkspace+"/default-dashboard",
-			fakeapi.Problem(http.StatusNotFound, "NotFound", "Dashboard "+missing+" was not found"))
+			fakeapi.Problem(http.StatusNotFound, "not_found", "Dashboard "+missing+" was not found"))
 	}
 	written := func(level string) func() {
 		return func() {

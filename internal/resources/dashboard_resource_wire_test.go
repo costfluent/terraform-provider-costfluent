@@ -399,7 +399,7 @@ func TestDashboardSavedFilterAttachFailureKeepsTheDashboard(t *testing.T) {
 	api := fakeapi.New(t)
 	dashboardFake(api)
 	api.Handle("PUT /v1/dashboards/{id}/saved-filter", func(fakeapi.Request) fakeapi.Response {
-		return fakeapi.Problem(http.StatusNotFound, "NotFound", "SavedFilter flt_0000000000000000000009 was not found")
+		return fakeapi.Problem(http.StatusNotFound, "not_found", "SavedFilter flt_0000000000000000000009 was not found")
 	})
 
 	resource.UnitTest(t, resource.TestCase{
@@ -437,7 +437,7 @@ func TestDashboardSavedFilterUpdateFailureSurfacesTheAPIError(t *testing.T) {
 			{
 				PreConfig: func() {
 					api.FailNext(http.MethodPut, "/v1/dashboards/"+dashboardOnlyID(t, api)+"/saved-filter",
-						fakeapi.Problem(http.StatusNotFound, "NotFound", "SavedFilter flt_0000000000000000000009 was not found"))
+						fakeapi.Problem(http.StatusNotFound, "not_found", "SavedFilter flt_0000000000000000000009 was not found"))
 				},
 				Config:      dashboardWithFilterConfig(api, "flt_0000000000000000000009"),
 				ExpectError: regexp.MustCompile(`Failed to set the dashboard's saved filter(.|\n)*was not found`),

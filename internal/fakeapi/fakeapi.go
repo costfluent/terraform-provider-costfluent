@@ -85,7 +85,7 @@ func MissingCapability(capability costfluent.Capability) Response {
 
 // NotFound answers 404 the way the API does for an object that is gone or not visible.
 func NotFound() Response {
-	return Problem(http.StatusNotFound, "NotFound", "The resource does not exist or is not visible to this token")
+	return Problem(http.StatusNotFound, "not_found", "The resource does not exist or is not visible to this token")
 }
 
 // Handler answers one request.
@@ -159,6 +159,14 @@ func (s *Server) Me(me costfluent.Me) {
 		me.OrganizationID = organizationID
 	}
 	s.me = me
+}
+
+// Carries reports whether the token GET /v1/me describes carries capability, for a handler that
+// answers as the API does a token without it.
+func (s *Server) Carries(capability costfluent.Capability) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.me.Can(capability)
 }
 
 // ProviderBlock is a provider configuration pointing at the fake, with extra attributes appended.
@@ -343,6 +351,9 @@ type Collection struct {
 	UpdateMethod string
 	// Apply changes the stored object for an update. The default copies every non-null field.
 	Apply func(obj, body map[string]any)
+	// Refuse answers an update the API refuses, given a copy of the stored object and the body,
+	// before anything changes; nil lets the update apply. The default refuses nothing.
+	Refuse func(obj, body map[string]any) *Response
 	// Updated builds the update response. The default returns the object.
 	Updated func(obj map[string]any) Response
 	// View renders a stored object for a read. The default returns it as stored.
@@ -495,6 +506,12 @@ func (s *Server) Collection(path string, c Collection) {
 		}
 		if refused := s.precondition(c, path, id, r); refused != nil {
 			return *refused
+		}
+		if c.Refuse != nil {
+			stored, _ := s.Get(path, id)
+			if refusal := c.Refuse(stored, r.Body); refusal != nil {
+				return *refusal
+			}
 		}
 		s.Update(path, id, func(obj map[string]any) {
 			if c.Apply != nil {

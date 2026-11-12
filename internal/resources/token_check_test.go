@@ -84,6 +84,9 @@ func TestTokenCheckRefusesAPlanBeforeAnythingIsWritten(t *testing.T) {
 			func(api *fakeapi.Server) string { return teamMemberConfig(api, "viewer") }, costfluent.CapabilityManageTeam},
 		{"costfluent_team_workspace_access", true, func(api *fakeapi.Server) { teamFake(api) },
 			func(api *fakeapi.Server) string { return teamConfig(api, "Platform", "canView") }, costfluent.CapabilityManageWorkspaceAccess},
+		// Reading the grant back needs it: the API lists none to a token without it.
+		{"costfluent_team_workspace_access", true, func(api *fakeapi.Server) { teamFake(api) },
+			func(api *fakeapi.Server) string { return teamConfig(api, "Platform", "canView") }, costfluent.CapabilityViewWorkspace},
 		{"costfluent_app", true, appFake,
 			func(api *fakeapi.Server) string {
 				return appConfigBlock(api, "Ops", fmt.Sprintf(`{ webhookUrl = %q }`, slackHook))
@@ -96,7 +99,7 @@ func TestTokenCheckRefusesAPlanBeforeAnythingIsWritten(t *testing.T) {
 			func(api *fakeapi.Server) string { return budgetConfig(api, "Platform", "500", "") }, costfluent.CapabilityCreateBudget},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.name+" without "+string(tc.create), func(t *testing.T) {
 			t.Parallel()
 			api := fakeapi.New(t)
 			tc.fake(api)

@@ -1,11 +1,12 @@
 package acceptance
 
 import (
+	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"testing"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
@@ -14,10 +15,12 @@ import (
 
 func TestAccBudget_basic(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
+	var created trackedObject
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_budget", budgetExists),
 		Steps: []resource.TestStep{
 			// Create
 			{
@@ -41,6 +44,7 @@ func TestAccBudget_basic(t *testing.T) {
 					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.#", "3"),
 					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.0.threshold_percent", "50"),
 					resource.TestCheckResourceAttr("costfluent_budget.test", "alerts.2.threshold_percent", "100"),
+					testAccRemember("costfluent_budget.test", &created),
 				),
 			},
 			testAccImportPlansNothing("costfluent_budget.test"),
@@ -60,6 +64,10 @@ func TestAccBudget_basic(t *testing.T) {
 					resource.TestCheckResourceAttr("costfluent_budget.test", "amount", "2000"),
 				),
 			},
+			{
+				Config: testAccWorkspaceFixture(rName),
+				Check:  testAccCheckRemoved(&created, budgetExists),
+			},
 		},
 	})
 }
@@ -72,6 +80,7 @@ func TestAccBudget_periods(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_budget", budgetExists),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccBudgetConfigWithPeriods(rName, "3000"),
@@ -104,6 +113,7 @@ func TestAccBudget_withAlerts(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_budget", budgetExists),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccBudgetConfigWithAlerts(rName, `
@@ -149,6 +159,7 @@ func TestAccBudget_importRefusesAnotherWorkspace(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_budget", budgetExists),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccBudgetConfig(rName, 1000) + fmt.Sprintf(`
@@ -175,15 +186,13 @@ resource "costfluent_workspace" "other" {
 // The "Read and write" acceptance token cannot create a notification channel, so this takes an
 // existing one of the organization the API key belongs to.
 func TestAccBudget_channels(t *testing.T) {
-	appID := os.Getenv("COSTFLUENT_ACC_APP_ID")
-	if appID == "" {
-		t.Skip("COSTFLUENT_ACC_APP_ID names no notification channel")
-	}
+	appID := testAccRequireEnv(t, "COSTFLUENT_ACC_APP_ID", "the id of a notification channel of the acceptance organization")
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_budget", budgetExists),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccBudgetConfigWithChannels(rName, fmt.Sprintf("app_ids = [%q]", appID)),
@@ -213,6 +222,7 @@ func TestAccBudget_onAReport(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_budget", budgetExists),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccBudgetConfigOnReport(rName, "first"),
@@ -257,6 +267,7 @@ func TestAccBudget_usage(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_budget", budgetExists),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccBudgetConfigUsage(rName, "Tokens"),
@@ -320,6 +331,7 @@ func TestAccBudget_emptyAlertsRefused(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_budget", budgetExists),
 		Steps: []resource.TestStep{{
 			Config: testAccWorkspaceFixture(rName) + fmt.Sprintf(`
 resource "costfluent_budget" "test" {
@@ -415,4 +427,116 @@ resource "costfluent_budget" "test" {
   ]
 }
 `, name, firstQuarter)
+}
+
+// budgetExists reads a budget by ID; the read takes no workspace.
+var budgetExists = existsByGet(func(c *costfluent.Client, ctx context.Context, _, id string) (*costfluent.Budget, error) {
+	return c.GetBudget(ctx, id)
+})
+
+// The provider copies the API's rule for a budget amount: above zero, to the cent, at most 16
+// integer digits. The smallest and largest amounts it accepts are stored and read back as
+// configured, and an amount finer than the cent is refused at plan. If the API's rule narrows
+// below the provider's copy, the applies here fail on its refusal.
+func TestAccBudget_atTheLimits(t *testing.T) {
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+	const largest = "9999999999999999.99"
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_budget", budgetExists),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccBudgetConfigQuarterly(rName, `amount = "0.01"`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_budget.test", "amount", "0.01"),
+					testAccCheckBudgetStored("costfluent_budget.test", "0.01"),
+				),
+			},
+			// Not the last step: the post-test destroy plans the last step's configuration, and
+			// this one is refused at plan.
+			{
+				Config:      testAccBudgetConfigQuarterly(rName, `amount = "1250.125"`),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`(?s)Invalid amount.*amount\s*=\s*"1250\.125"`),
+			},
+			{
+				Config: testAccBudgetConfigQuarterly(rName, `periods = [
+    { start_date = "2026-01-01", end_date = "2026-03-31", amount = "1250.50" },
+    { start_date = "2026-04-01", end_date = "2026-06-30", amount = "`+largest+`" },
+  ]`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply:             []plancheck.PlanCheck{plancheck.ExpectResourceAction("costfluent_budget.test", plancheck.ResourceActionUpdate)},
+					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_budget.test", "periods.0.amount", "1250.50"),
+					resource.TestCheckResourceAttr("costfluent_budget.test", "periods.1.amount", largest),
+					testAccCheckBudgetStored("costfluent_budget.test", "", "1250.50", largest),
+				),
+			},
+		},
+	})
+}
+
+// testAccCheckBudgetStored reads the budget back through the API and compares, as numbers, its
+// amount (none when amount is "") and its periods' amounts with what was configured, so a value
+// the API rounded or cut would fail although the provider keeps the configured string in state.
+func testAccCheckBudgetStored(address, amount string, periods ...string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		budget, err := testAccClient().GetBudget(context.Background(), s.RootModule().Resources[address].Primary.ID)
+		if err != nil {
+			return err
+		}
+		if amount != "" {
+			if err := testAccSameAmount("amount", budget.Amount, amount); err != nil {
+				return err
+			}
+		}
+		if len(periods) == 0 {
+			return nil
+		}
+		if len(budget.Periods) != len(periods) {
+			return fmt.Errorf("budget holds %d periods, want %d", len(budget.Periods), len(periods))
+		}
+		for i, want := range periods {
+			if err := testAccSameAmount(fmt.Sprintf("period %d", i), budget.Periods[i].Amount, want); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func testAccSameAmount(what string, got costfluent.Decimal, want string) error {
+	gotRat, err := got.Rat()
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	wantRat, err := costfluent.Decimal(want).Rat()
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if gotRat.Cmp(wantRat) != 0 {
+		return fmt.Errorf("%s stored as %s, want %s", what, got, want)
+	}
+	return nil
+}
+
+func testAccBudgetConfigQuarterly(name, amounts string) string {
+	return testAccWorkspaceFixture(name) + fmt.Sprintf(`
+resource "costfluent_budget" "test" {
+  workspace_id   = costfluent_workspace.fixture.id
+  name           = %q
+  currency       = "EUR"
+  start_date     = "2026-01-01"
+  interval_count = 3
+  interval_unit  = "month"
+  %s
+}
+`, name, amounts)
 }

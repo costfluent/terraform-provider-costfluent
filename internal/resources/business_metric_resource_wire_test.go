@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/fakeapi"
@@ -240,6 +241,172 @@ func TestBusinessMetricRefusesMoreThanFiveLabelColumns(t *testing.T) {
 			},
 		},
 	})
+}
+
+// Every column here is one the API refuses after trimming it, so a plan that let it through would
+// fail only at apply, after a replacement had destroyed the old metric.
+func TestBusinessMetricRefusesALabelColumnTheAPIRefusesAtPlan(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, columns, want string
+	}{
+		{"blank", `["region", ""]`, `label_columns\[1\] "" is blank`},
+		{"only whitespace", `["  "]`, `label_columns\[0\] "  " is blank`},
+		{"over 100 characters", `["` + strings.Repeat("x", 101) + `"]`, `label_columns\[0\] "x+" is longer than 100`},
+		{"over 100 UTF-16 units", `["` + strings.Repeat("\U0001F600", 51) + `"]`, `label_columns\[0\] ".+" is longer than 100`},
+		{"equals sign", `["=SUM(A1)"]`, `label_columns\[0\] "=SUM\(A1\)" starts like a spreadsheet formula`},
+		{"plus sign", `["+region"]`, `starts like a spreadsheet formula`},
+		{"minus sign", `["-"]`, `starts like a spreadsheet formula`},
+		{"at sign", `["@user"]`, `starts like a spreadsheet formula`},
+		{"full-width equals sign", `["\uFF1Dregion"]`, `starts like a spreadsheet formula`},
+		{"formula after whitespace", `[" =x"]`, `label_columns\[0\] " =x" starts like a spreadsheet formula`},
+		{"number past the decimal range", `["region", "-79228162514264337593543950336"]`, `label_columns\[1\] "-79228162514264337593543950336" starts like a spreadsheet formula`},
+		{"thirty digits", `["-100000000000000000000000000000"]`, `starts like a spreadsheet formula`},
+		{"past the decimal range after leading zeros", `["-0079228162514264337593543950336"]`, `starts like a spreadsheet formula`},
+		{"past the decimal range with separators", `["+79,228,162,514,264,337,593,543,950,336"]`, `starts like a spreadsheet formula`},
+		{"decimal range rounded up", `["-79228162514264337593543950335.5"]`, `starts like a spreadsheet formula`},
+		{"exponent", `["-5e3"]`, `starts like a spreadsheet formula`},
+		{"separator after the point", `["-1.000,5"]`, `starts like a spreadsheet formula`},
+		{"separator first", `["-,5"]`, `starts like a spreadsheet formula`},
+		{"two signs", `["+-5"]`, `starts like a spreadsheet formula`},
+		{"space after the sign", `["- 5"]`, `starts like a spreadsheet formula`},
+		{"trailing sign", `["-5-"]`, `starts like a spreadsheet formula`},
+		{"date", `["region", "Date"]`, `label_columns\[1\] "Date" is reserved: every value import carries a date and an amount column`},
+		{"amount", `["AMOUNT"]`, `label_columns\[0\] "AMOUNT" is reserved`},
+		{"date padded", `[" date "]`, `is reserved`},
+		{"duplicate ignoring case", `["region", "Region"]`, `label_columns\[1\] "Region" repeats label column "region", ignoring case`},
+		{"duplicate after trimming", `["region", "region "]`, `repeats label column "region"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			businessMetricFake(api)
+			// Terraform wraps a long detail at any space.
+			want := regexp.MustCompile(`Invalid label column(.|\n)*` + strings.ReplaceAll(tc.want, " ", `\s+`))
+
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{
+					{
+						Config:      businessMetricConfig(api, "Customers", "  label_columns = "+tc.columns+"\n"),
+						PlanOnly:    true,
+						ExpectError: want,
+					},
+				},
+			})
+			if sent := api.Requests("", ""); len(sent) != 0 {
+				t.Fatalf("plan sent %s %s, want no request", sent[0].Method, sent[0].Path)
+			}
+		})
+	}
+}
+
+// Columns at the edge of the API's rule are accepted as the API accepts them, so the plan does not
+// refuse a metric the API would create. Each signed column here parses as a .NET decimal, which the
+// API reads as a number rather than a formula.
+func TestBusinessMetricAcceptsTheLabelColumnsTheAPIAccepts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		columns []string
+	}{
+		{"at the limits", []string{strings.Repeat("x", 100), strings.Repeat("\u00e9", 100), "-5", "+1,000.5", "dates"}},
+		{"case pairs the API keeps apart", []string{"\u0131", "i", "\u017f", "s"}},
+		{"the decimal range", []string{"-79228162514264337593543950335", "+0079228162514264337593543950335",
+			"-79,228,162,514,264,337,593,543,950,335.4", "-79228162514264337593543950334.5"}},
+		{"numbers without digits on one side", []string{"-.5", "-5.", "-1,2,3", "-5,"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			businessMetricFake(api)
+			quoted := make([]string, len(tc.columns))
+			checks := []resource.TestCheckFunc{
+				resource.TestCheckResourceAttr("costfluent_business_metric.m", "label_columns.#", fmt.Sprint(len(tc.columns))),
+			}
+			for i, column := range tc.columns {
+				quoted[i] = fmt.Sprintf("%q", column)
+				checks = append(checks, resource.TestCheckResourceAttr("costfluent_business_metric.m", fmt.Sprintf("label_columns.%d", i), column))
+			}
+
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{
+					{
+						Config: businessMetricConfig(api, "Customers",
+							"  label_columns = ["+strings.Join(quoted, ", ")+"]\n"),
+						Check: resource.ComposeTestCheckFunc(checks...),
+					},
+				},
+			})
+		})
+	}
+}
+
+// A column not known until apply cannot be checked at plan, so it does not fail the plan as blank.
+func TestBusinessMetricPlansALabelColumnNotKnownUntilApply(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	businessMetricFake(api)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "terraform_data" "column" {
+  input = "region"
+}
+` + businessMetricConfig(api, "Customers", `  label_columns = [terraform_data.column.output, "customer"]`+"\n"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_business_metric.m", "label_columns.0", "region"),
+					resource.TestCheckResourceAttr("costfluent_business_metric.m", "label_columns.1", "customer"),
+				),
+			},
+		},
+	})
+}
+
+func TestBusinessMetricRefusesABlankNameOrUnitAtPlan(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, config, want string
+	}{
+		{"name", `
+resource "costfluent_business_metric" "m" {
+  workspace_id = "` + testWorkspace + `"
+  name         = "   "
+  unit         = "customer"
+}
+`, `name is blank`},
+		{"unit", `
+resource "costfluent_business_metric" "m" {
+  workspace_id = "` + testWorkspace + `"
+  name         = "Customers"
+  unit         = "\t"
+}
+`, `unit is blank`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			businessMetricFake(api)
+
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{
+					{
+						Config:      api.ProviderBlock() + tc.config,
+						PlanOnly:    true,
+						ExpectError: regexp.MustCompile(tc.want),
+					},
+				},
+			})
+			if sent := api.Requests("", ""); len(sent) != 0 {
+				t.Fatalf("plan sent %s %s, want no request", sent[0].Method, sent[0].Path)
+			}
+		})
+	}
 }
 
 func TestBusinessMetricCreateWhoseReadFailsIsTainted(t *testing.T) {

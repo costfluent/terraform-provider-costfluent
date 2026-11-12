@@ -185,7 +185,7 @@ func (r *BudgetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					"so it is never rounded through a float: money in currency, or for a usage budget a quantity in " +
 					"usage_unit. The same number at another scale is not a change. Exactly one of amount and periods.",
 				Validators: []validator.String{
-					validators.Decimal(),
+					validators.BudgetAmount(),
 					stringvalidator.ExactlyOneOf(path.MatchRoot("periods")),
 				},
 			},
@@ -248,7 +248,7 @@ func (r *BudgetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 						"amount": schema.StringAttribute{
 							Required:    true,
 							Description: "The period's amount, as a decimal string with at most two decimals, in what measure counts.",
-							Validators:  []validator.String{validators.Decimal()},
+							Validators:  []validator.String{validators.BudgetAmount()},
 						},
 					},
 				},

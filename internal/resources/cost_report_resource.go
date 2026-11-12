@@ -2,8 +2,11 @@ package resources
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
@@ -25,11 +28,12 @@ import (
 )
 
 var (
-	_ resource.Resource                 = &CostReportResource{}
-	_ resource.ResourceWithConfigure    = &CostReportResource{}
-	_ resource.ResourceWithModifyPlan   = &CostReportResource{}
-	_ resource.ResourceWithImportState  = &CostReportResource{}
-	_ resource.ResourceWithUpgradeState = &CostReportResource{}
+	_ resource.Resource                   = &CostReportResource{}
+	_ resource.ResourceWithConfigure      = &CostReportResource{}
+	_ resource.ResourceWithValidateConfig = &CostReportResource{}
+	_ resource.ResourceWithModifyPlan     = &CostReportResource{}
+	_ resource.ResourceWithImportState    = &CostReportResource{}
+	_ resource.ResourceWithUpgradeState   = &CostReportResource{}
 )
 
 // CostReportResource manages a saved exploration.
@@ -80,6 +84,7 @@ type CostReportSettingsModel struct {
 	UnitCostLabelFilter types.List   `tfsdk:"unit_cost_label_filter"`
 	UnitCostCalculation types.String `tfsdk:"unit_cost_calculation"`
 	UnitCostScale       types.Int64  `tfsdk:"unit_cost_scale"`
+	ComparisonMode      types.String `tfsdk:"comparison_mode"`
 }
 
 type CostReportUnitCostLabelModel struct {
@@ -139,7 +144,7 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"chart_type": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "How the report is drawn.",
+				Description: "How the report is drawn. Left out of a new report, it is `stackedBar`.",
 			},
 			// Computed so a report whose axis the app set does not drift, and so an update that
 			// leaves it out lets the API keep the axis or draw by date where the new chart cannot.
@@ -156,26 +161,36 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Description: "Bucket size the cost is grouped into over time.",
 			},
 			"date_interval": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Relative window the report covers.",
+				Optional: true,
+				Computed: true,
+				Description: "Window the report covers, such as `last30Days`, `last3CompleteMonths` (the three whole months " +
+					"before this one), `throughNext3Months` (the first of this month to the last day of the third month " +
+					"after it; with `settings.show_forecast` on, the forecast fills the days to come) or `custom` " +
+					"(start_date to end_date). https://docs.costfluent.com/api/cost-reports lists every value.",
 			},
-			// Computed because the API keeps a date an update leaves out and cannot clear one: a date
-			// removed from the configuration stays the stored one.
+			// Computed because the API keeps a date an update leaves out and refuses to clear one of a
+			// custom window, which needs both: a date removed from the configuration is cleared on a
+			// relative window and stays the stored one on a custom window.
 			"start_date": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Inclusive first day, for an absolute window. Removed, the report keeps its stored date.",
+				Optional: true,
+				Computed: true,
+				Description: "Inclusive first day, for a `custom` window. Removed from the configuration, it is cleared " +
+					"while `date_interval` is a relative window and kept while it is `custom`, which needs both dates. " +
+					"A report moved to a relative window in the console keeps its stored dates, so importing it " +
+					"with a configuration that sets none plans clearing them.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					removedDateClearsOnARelativeWindow{},
 				},
 			},
 			"end_date": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Inclusive last day, for an absolute window. Removed, the report keeps its stored date.",
+				Optional: true,
+				Computed: true,
+				Description: "Inclusive last day, for a `custom` window. Removed from the configuration, it is cleared " +
+					"while `date_interval` is a relative window and kept while it is `custom`, which needs both dates. " +
+					"A report moved to a relative window in the console keeps its stored dates, so importing it " +
+					"with a configuration that sets none plans clearing them.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					removedDateClearsOnARelativeWindow{},
 				},
 			},
 			"filter": schema.StringAttribute{
@@ -197,10 +212,11 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 						"key":       types.StringNull(),
 					})},
 				)),
-				Description: "Up to three slots the report breaks its window down by, outermost first. " +
-					"Omitted, the report groups by ServiceName. Set to `[]` for a single total.",
+				Description: fmt.Sprintf("Up to %d slots the report breaks its window down by, outermost first, "+
+					"no slot twice. Omitted, the report groups by ServiceName. Set to `[]` for a single total.",
+					costReportMaxGroupings),
 				Validators: []validator.List{
-					listvalidator.SizeAtMost(3),
+					listvalidator.SizeAtMost(costReportMaxGroupings),
 				},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
@@ -215,8 +231,9 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 						},
 						"key": schema.StringAttribute{
 							Optional: true,
-							Description: "What the dimension needs to name a group: the tag key for Tag, the " +
-								"virtual tag token for VirtualTag. Omit for the other dimensions.",
+							Description: fmt.Sprintf("What the dimension needs to name a group, and only Tag and "+
+								"VirtualTag take one: the tag key, at most %d characters, for Tag; the `id` of a "+
+								"`costfluent_virtual_tag`, not its `key`, for VirtualTag.", costReportMaxGroupingKeyLength),
 						},
 					},
 				},
@@ -224,9 +241,12 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"settings": schema.SingleNestedAttribute{
 				Optional: true,
 				Computed: true,
-				Description: "What the report counts. `measure` chooses what it charts; each other setting changes the money. " +
-					"A setting left out takes the workspace's report default on create and keeps the report's own on update, " +
-					"and a comparison window set in the app is kept.",
+				Description: "What the report counts and what it charts beside it. `amortize`, `include_credits`, " +
+					"`include_refunds` and `include_tax` decide which money the report counts; `measure` chooses whether it " +
+					"charts that cost, a usage or a count; `show_forecast`, `compare_to_last_period` and `comparison_mode` " +
+					"draw a forecast and a comparison beside it, and the `unit_cost_*` settings a unit cost, none of which " +
+					"changes the money counted. A setting left out takes the workspace's report default on create and keeps " +
+					"the report's own on update, and a comparison window set in the app is kept.",
 				Attributes: map[string]schema.Attribute{
 					"amortize": schema.BoolAttribute{
 						Optional: true,
@@ -260,22 +280,25 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					},
 					"unit_cost_label_filter": schema.ListNestedAttribute{
 						Optional: true,
-						Description: "Which of the unit cost metric's values the report counts: a value counts when " +
-							"its label in every listed column is one of that column's values. Each `key` is a label " +
-							"column of the metric, listed once. Needs `unit_cost_metric_id`; unset counts every value.",
+						Description: fmt.Sprintf("Which of the unit cost metric's values the report counts: a value counts when "+
+							"its label in every listed column is one of that column's values. Each `key` is a label "+
+							"column of the metric, listed once ignoring case, in at most %d conditions. Needs "+
+							"`unit_cost_metric_id`; unset counts every value.", businessMetricMaxLabelColumns),
 						Validators: []validator.List{
-							listvalidator.SizeAtLeast(1),
+							listvalidator.SizeBetween(1, businessMetricMaxLabelColumns),
 						},
 						NestedObject: schema.NestedAttributeObject{
 							Attributes: map[string]schema.Attribute{
 								"key": schema.StringAttribute{
 									Required:    true,
-									Description: "A label column of the metric.",
+									Description: fmt.Sprintf("A label column of the metric, at most %d characters.", businessMetricMaxLabelLength),
 								},
 								"values": schema.ListAttribute{
 									Required:    true,
 									ElementType: types.StringType,
-									Description: "The labels of that column the unit cost counts, any one of them.",
+									Description: fmt.Sprintf("The labels of that column the unit cost counts, any one of them: "+
+										"at most %d different ones, each at most %d characters.",
+										costReportMaxLabelFilterValues, businessMetricMaxLabelLength),
 									Validators: []validator.List{
 										listvalidator.SizeAtLeast(1),
 									},
@@ -307,6 +330,21 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 							int64validator.OneOf(1, 100, 1_000, 1_000_000, 1_000_000_000),
 						},
 					},
+					// Computed because the API keeps the mode an update leaves out: an unset one is not
+					// sent, so a year-ago comparison chosen in the app is not reset to the previous period.
+					"comparison_mode": schema.StringAttribute{
+						Optional: true,
+						Computed: true,
+						Description: "What `compare_to_last_period` compares the report with: `previousPeriod`, the " +
+							"period before the report's window, or `samePeriodLastYear`, the same days a year earlier " +
+							"(by day a calendar year back, 29 February to the 28th; by week 52 weeks back, so weekdays " +
+							"pair; by month and quarter twelve months back). A comparison window set in the app wins " +
+							"over it on the report's own range; the mode decides under every dashboard range. Left " +
+							"out, a new report compares with `previousPeriod` and an update keeps the report's own.",
+						Validators: []validator.String{
+							stringvalidator.OneOf(costfluent.ComparisonModePreviousPeriod, costfluent.ComparisonModeSamePeriodLastYear),
+						},
+					},
 				},
 			},
 			"created_at": schema.StringAttribute{
@@ -319,6 +357,224 @@ func (r *CostReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 		},
 	}
+}
+
+// ModifyPlan checks the token, then plans updated_at unknown for any update. The framework marks
+// the computed attributes of a changed plan unknown before the attribute plan modifiers run, so an
+// update whose one change is a date removedDateClearsOnARelativeWindow clears would otherwise
+// promise the stored updated_at, and the apply that moves it would fail as an inconsistent result.
+func (r *CostReportResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	r.managed.ModifyPlan(ctx, req, resp)
+	if resp.Diagnostics.HasError() || req.State.Raw.IsNull() || resp.Plan.Raw.IsNull() || resp.Plan.Raw.Equal(req.State.Raw) {
+		return
+	}
+	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("updated_at"), types.StringUnknown())...)
+}
+
+// costReportCustomInterval is the date_interval whose window is start_date to end_date.
+const costReportCustomInterval = "custom"
+
+// removedDateClearsOnARelativeWindow plans a date the configuration leaves out null while the
+// report's date_interval after the update is known and not custom, which the update then clears,
+// and the stored date otherwise: the API refuses clearing a date of a custom window, which needs
+// both, and keeps a date an update leaves out. The interval after the update is the configured one,
+// or the stored one when the configuration leaves it out, since the update then sends none; the
+// planned one is unknown then whenever anything else changes. A create, or a date the configuration
+// sets, is planned as usual.
+type removedDateClearsOnARelativeWindow struct{}
+
+func (removedDateClearsOnARelativeWindow) Description(context.Context) string {
+	return "Clears a removed date on a relative window and keeps it on a custom one."
+}
+
+func (m removedDateClearsOnARelativeWindow) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (removedDateClearsOnARelativeWindow) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() || !req.ConfigValue.IsNull() {
+		return
+	}
+	var interval types.String
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("date_interval"), &interval)...)
+	if interval.IsNull() {
+		resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("date_interval"), &interval)...)
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if interval.IsNull() || interval.IsUnknown() || strings.EqualFold(interval.ValueString(), costReportCustomInterval) {
+		resp.PlanValue = req.StateValue
+		return
+	}
+	resp.PlanValue = types.StringNull()
+}
+
+// The API's grouping and unit cost label filter limits, which ValidateConfig holds a plan to.
+const (
+	costReportMaxGroupings         = 3
+	costReportMaxGroupingKeyLength = 128
+	costReportMaxLabelFilterValues = 100
+
+	groupingDimensionTag        = "Tag"
+	groupingDimensionVirtualTag = "VirtualTag"
+	virtualTagIDPrefix          = "vtag_"
+	virtualTagIDPayloadLength   = 22
+)
+
+// ValidateConfig refuses at plan the grouping slots and unit cost label filters the API refuses at
+// apply. A slot is checked against the others, which no attribute validator can see, and a value
+// still unknown is left to the API.
+func (r *CostReportResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config CostReportResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	validateCostReportGrouping(ctx, config.GroupBy, &resp.Diagnostics)
+
+	var settings CostReportSettingsModel
+	resp.Diagnostics.Append(config.Settings.As(ctx, &settings, basetypes.ObjectAsOptions{
+		UnhandledNullAsEmpty: true, UnhandledUnknownAsEmpty: true,
+	})...)
+	validateUnitCostLabelFilter(ctx, settings.UnitCostLabelFilter, &resp.Diagnostics)
+}
+
+// validateCostReportGrouping holds each slot to the API's rules: Tag and VirtualTag name a key, a
+// VirtualTag one shaped as a virtual tag id, no other dimension one, and no dimension and key twice,
+// which also keeps Segment to one slot. The API reads the dimension ignoring case, the key as written
+// and an empty key as none.
+func validateCostReportGrouping(ctx context.Context, list types.List, diags *diag.Diagnostics) {
+	var slots []types.Object
+	diags.Append(list.ElementsAs(ctx, &slots, true)...)
+	seen := map[string]int{}
+	for i, object := range slots {
+		if object.IsUnknown() {
+			continue
+		}
+		var slot CostReportGroupingModel
+		diags.Append(object.As(ctx, &slot, basetypes.ObjectAsOptions{})...)
+		if slot.Dimension.IsUnknown() || slot.Key.IsUnknown() {
+			continue
+		}
+		at := path.Root("group_by").AtListIndex(i)
+		dimension, key := canonicalGroupingDimension(slot.Dimension.ValueString()), slot.Key.ValueString()
+		if problem := groupingKeyProblem(dimension, key); problem != "" {
+			diags.AddAttributeError(at, "Invalid grouping slot", fmt.Sprintf("%s: %s.", at, problem))
+		}
+		identity := dimension + "\x00" + key
+		if first, repeated := seen[identity]; repeated {
+			diags.AddAttributeError(at, "Invalid grouping slot",
+				fmt.Sprintf("%s repeats group_by[%d]: a report groups by each dimension and key once.", at, first))
+			continue
+		}
+		seen[identity] = i
+	}
+}
+
+func groupingKeyProblem(dimension, key string) string {
+	keyed := dimension == groupingDimensionTag || dimension == groupingDimensionVirtualTag
+	switch {
+	case !keyed && key != "":
+		return fmt.Sprintf("only %s and %s take a key; %s does not", groupingDimensionTag, groupingDimensionVirtualTag, dimension)
+	case !keyed:
+		return ""
+	case strings.TrimSpace(key) == "":
+		return fmt.Sprintf("grouping by %s needs the key it groups on", dimension)
+	case utf16Length(key) > costReportMaxGroupingKeyLength:
+		return fmt.Sprintf("a grouping key is at most %d characters", costReportMaxGroupingKeyLength)
+	case dimension == groupingDimensionVirtualTag && !isVirtualTagID(key):
+		return fmt.Sprintf("grouping by %s names the virtual tag's id (%s...), not its key %q",
+			groupingDimensionVirtualTag, virtualTagIDPrefix, key)
+	}
+	return ""
+}
+
+// isVirtualTagID is whether id has the case-sensitive prefix and the base64url payload of a
+// virtual tag id. The API also requires the payload's last character to be the canonical spelling
+// of its GUID, which this leaves to the API.
+func isVirtualTagID(id string) bool {
+	payload, prefixed := strings.CutPrefix(id, virtualTagIDPrefix)
+	if !prefixed || len(payload) != virtualTagIDPayloadLength {
+		return false
+	}
+	for _, c := range payload {
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// canonicalGroupingDimension is the dimension as CostGroupDimensions spells it, or as given when it
+// is none of them, which the dimension's own validator refuses.
+func canonicalGroupingDimension(dimension string) string {
+	for _, known := range costfluent.CostGroupDimensions() {
+		if strings.EqualFold(known, dimension) {
+			return known
+		}
+	}
+	return dimension
+}
+
+// validateUnitCostLabelFilter holds the filter to the API's rules, which it applies after trimming
+// each key and value and counting each value once: a key of 1 to the label length, listed once
+// ignoring case, and 1 to costReportMaxLabelFilterValues values of 1 to the label length each.
+func validateUnitCostLabelFilter(ctx context.Context, list types.List, diags *diag.Diagnostics) {
+	if list.IsNull() || list.IsUnknown() {
+		return
+	}
+	filter := path.Root("settings").AtName("unit_cost_label_filter")
+	var conditions []types.Object
+	diags.Append(list.ElementsAs(ctx, &conditions, false)...)
+	seen := map[string]int{}
+	for i, object := range conditions {
+		at := filter.AtListIndex(i)
+		// A condition unknown as a whole reads with a null key and values, and is left to the API.
+		var condition CostReportUnitCostLabelModel
+		diags.Append(object.As(ctx, &condition, basetypes.ObjectAsOptions{UnhandledUnknownAsEmpty: true})...)
+		if !condition.Key.IsUnknown() && !condition.Key.IsNull() {
+			key := strings.TrimSpace(condition.Key.ValueString())
+			folded := ignoringCase(key)
+			switch first, repeated := seen[folded]; {
+			case key == "" || utf16Length(key) > businessMetricMaxLabelLength:
+				diags.AddAttributeError(at.AtName("key"), "Invalid unit cost label filter",
+					fmt.Sprintf("%s: a label column is named in 1 to %d characters.", at.AtName("key"), businessMetricMaxLabelLength))
+			case repeated:
+				diags.AddAttributeError(at.AtName("key"), "Invalid unit cost label filter",
+					fmt.Sprintf("%s repeats the label column of %s, ignoring case: list its values in one condition.",
+						at.AtName("key"), filter.AtListIndex(first)))
+			default:
+				seen[folded] = i
+			}
+		}
+		if condition.Values.IsNull() || condition.Values.IsUnknown() {
+			continue
+		}
+		var values []types.String
+		diags.Append(condition.Values.ElementsAs(ctx, &values, false)...)
+		distinct := map[string]bool{}
+		for j, value := range values {
+			if value.IsUnknown() {
+				continue
+			}
+			// A null label reads as empty, which the API refuses as it does an empty one.
+			trimmed := strings.TrimSpace(value.ValueString())
+			if trimmed == "" || utf16Length(trimmed) > businessMetricMaxLabelLength {
+				diags.AddAttributeError(at.AtName("values").AtListIndex(j), "Invalid unit cost label filter",
+					fmt.Sprintf("%s: a label is 1 to %d characters.", at.AtName("values").AtListIndex(j), businessMetricMaxLabelLength))
+			}
+			distinct[trimmed] = true
+		}
+		if len(distinct) > costReportMaxLabelFilterValues {
+			diags.AddAttributeError(at.AtName("values"), "Invalid unit cost label filter",
+				fmt.Sprintf("%s: a condition counts at most %d different labels.", at.AtName("values"), costReportMaxLabelFilterValues))
+		}
+	}
+}
+
+// utf16Length is a string's length as the API counts it, in UTF-16 code units.
+func utf16Length(s string) int {
+	return len(utf16.Encode([]rune(s)))
 }
 
 func (r *CostReportResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -411,13 +667,18 @@ func (r *CostReportResource) Update(ctx context.Context, req resource.UpdateRequ
 		input.GroupBy = o.GroupBy
 		input.Settings = o.Settings
 	})
-	// The API keeps a filter the update omits, so taking one away has to be asked for.
+	// The API keeps a filter, folder or date the update omits, so taking one away has to be asked
+	// for. A date plans null only on a relative window (removedDateClearsOnARelativeWindow).
 	input.ClearFilter = plan.Filter.IsNull() && !state.Filter.IsNull()
 	input.ClearFolder = plan.FolderID.IsNull() && !state.FolderID.IsNull()
+	input.ClearStartDate = plan.StartDate.IsNull() && !state.StartDate.IsNull()
+	input.ClearEndDate = plan.EndDate.IsNull() && !state.EndDate.IsNull()
 
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	version := ifMatch(ctx, req.Private, &resp.Diagnostics)
 
 	// The API takes the comparison window as sent whenever settings are, and the schema does not
 	// model it, so an update carrying settings sends back the window the report holds.
@@ -429,10 +690,20 @@ func (r *CostReportResource) Update(ctx context.Context, req resource.UpdateRequ
 		}
 		input.Settings.ComparisonStartDate = stored.Settings.ComparisonStartDate
 		input.Settings.ComparisonEndDate = stored.Settings.ComparisonEndDate
+
+		reset, diags := resetByReplacingItsMetric(ctx, r.client, &plan, &state, stored)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		// An empty ETag would send no condition at all, overwriting whatever the report holds.
+		if reset && stored.ETag != "" {
+			version = costfluent.IfMatch(stored.ETag)
+		}
 	}
 
 	report, err := r.client.UpdateCostReport(
-		ctx, state.WorkspaceID.ValueString(), state.ID.ValueString(), input, ifMatch(ctx, req.Private, &resp.Diagnostics))
+		ctx, state.WorkspaceID.ValueString(), state.ID.ValueString(), input, version)
 	if changedOutsideTerraform(err, &resp.Diagnostics, "Cost report", false) {
 		return
 	}
@@ -444,6 +715,67 @@ func (r *CostReportResource) Update(ctx context.Context, req resource.UpdateRequ
 	resp.Diagnostics.Append(mapCostReportToModel(ctx, r.client, report, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 	resp.Diagnostics.Append(setETag(ctx, resp.Private, report.ETag)...)
+}
+
+// resetByReplacingItsMetric reports whether stored differs from state only as the API resets a
+// report whose unit cost metric is deleted (no metric, no label filter, per unit, per 1), while
+// the plan moves the report off that metric and that metric no longer exists. An apply that
+// replaces the metric deletes it before this update, so the reset and the version it moved are the
+// apply's own change, and refusing the version Terraform read would fail every such apply. Any
+// other difference, or the same report while the metric still exists, is a change made elsewhere,
+// which the version Terraform last read still refuses.
+func resetByReplacingItsMetric(
+	ctx context.Context, client *costfluent.Client, plan, state *CostReportResourceModel, stored *costfluent.CostReport,
+) (bool, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if stored.Settings.UnitCostMetricID != nil || state.Settings.IsNull() || state.Settings.IsUnknown() {
+		return false, diags
+	}
+
+	var planned, held CostReportSettingsModel
+	diags.Append(plan.Settings.As(ctx, &planned, basetypes.ObjectAsOptions{})...)
+	diags.Append(state.Settings.As(ctx, &held, basetypes.ObjectAsOptions{})...)
+	if diags.HasError() || held.UnitCostMetricID.IsNull() || planned.UnitCostMetricID.Equal(held.UnitCostMetricID) {
+		return false, diags
+	}
+
+	charted := held.UnitCostMetricID.ValueString()
+	held.UnitCostMetricID = types.StringNull()
+	held.UnitCostLabelFilter = types.ListNull(types.ObjectType{AttrTypes: costReportUnitCostLabelAttrTypes})
+	held.UnitCostCalculation = types.StringValue(costfluent.UnitCostPerUnit)
+	held.UnitCostScale = types.Int64Value(1)
+	expected := *state
+	settings, settingDiags := types.ObjectValueFrom(ctx, costReportSettingsAttrTypes, held)
+	diags.Append(settingDiags...)
+	expected.Settings = settings
+
+	read := *state
+	diags.Append(mapCostReportToModel(ctx, client, stored, &read)...)
+	if diags.HasError() {
+		return false, diags
+	}
+
+	for _, field := range [][2]attr.Value{
+		{read.ID, expected.ID}, {read.Title, expected.Title}, {read.FolderID, expected.FolderID},
+		{read.ChartType, expected.ChartType}, {read.ChartAxis, expected.ChartAxis}, {read.DateBin, expected.DateBin},
+		{read.DateInterval, expected.DateInterval}, {read.StartDate, expected.StartDate}, {read.EndDate, expected.EndDate},
+		{read.Filter, expected.Filter}, {read.GroupBy, expected.GroupBy}, {read.Settings, expected.Settings},
+	} {
+		if !field[0].Equal(field[1]) {
+			return false, diags
+		}
+	}
+
+	// The API reads a report whose unit cost was turned off in the app exactly as one its metric's
+	// deletion reset, so only the metric being gone tells the two apart.
+	_, err := client.GetBusinessMetric(ctx, state.WorkspaceID.ValueString(), charted)
+	if costfluent.IsNotFound(err) {
+		return true, diags
+	}
+	if err != nil {
+		apidiag.AddError(&diags, "Failed to read the business metric the cost report charted", err)
+	}
+	return false, diags
 }
 
 func (r *CostReportResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -556,7 +888,8 @@ func upgradeCostReportStateV0(ctx context.Context, req resource.UpgradeStateRequ
 		return
 	}
 
-	// v0 settings predate the measure and the unit cost, which the next read fills in.
+	// v0 settings predate the measure, the unit cost and the comparison mode, which the next read
+	// fills in.
 	settings := types.ObjectNull(costReportSettingsAttrTypes)
 	if !prior.Settings.IsNull() && !prior.Settings.IsUnknown() {
 		attrs := prior.Settings.Attributes()
@@ -565,6 +898,7 @@ func upgradeCostReportStateV0(ctx context.Context, req resource.UpgradeStateRequ
 		attrs["unit_cost_label_filter"] = types.ListNull(types.ObjectType{AttrTypes: costReportUnitCostLabelAttrTypes})
 		attrs["unit_cost_calculation"] = types.StringNull()
 		attrs["unit_cost_scale"] = types.Int64Null()
+		attrs["comparison_mode"] = types.StringNull()
 		settings, diags = types.ObjectValue(costReportSettingsAttrTypes, attrs)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
@@ -666,6 +1000,7 @@ func applyCostReportOptionals(
 			UnitCostLabelFilter: unitCostLabelFilter(ctx, settings.UnitCostLabelFilter, diags),
 			UnitCostCalculation: settings.UnitCostCalculation.ValueString(),
 			UnitCostScale:       knownInt(settings.UnitCostScale),
+			ComparisonMode:      settings.ComparisonMode.ValueString(),
 		}
 	}
 
@@ -719,6 +1054,10 @@ func mapCostReportToModel(
 	diags.Append(groupDiags...)
 	model.GroupBy = groupBy
 
+	var prior CostReportSettingsModel
+	if !model.Settings.IsNull() && !model.Settings.IsUnknown() {
+		diags.Append(model.Settings.As(ctx, &prior, basetypes.ObjectAsOptions{})...)
+	}
 	settings, settingDiags := types.ObjectValueFrom(ctx, costReportSettingsAttrTypes, CostReportSettingsModel{
 		Amortize:            types.BoolValue(report.Settings.Amortize),
 		IncludeCredits:      types.BoolValue(report.Settings.IncludeCredits),
@@ -728,9 +1067,10 @@ func mapCostReportToModel(
 		CompareToLastPeriod: types.BoolValue(report.Settings.CompareToLastPeriod),
 		Measure:             types.StringValue(report.Settings.Measure),
 		UnitCostMetricID:    types.StringPointerValue(report.Settings.UnitCostMetricID),
-		UnitCostLabelFilter: unitCostLabelList(ctx, report.Settings.UnitCostLabelFilter, &diags),
+		UnitCostLabelFilter: unitCostLabelList(ctx, prior.UnitCostLabelFilter, report.Settings.UnitCostLabelFilter, &diags),
 		UnitCostCalculation: types.StringValue(report.Settings.UnitCostCalculation),
 		UnitCostScale:       types.Int64Value(int64(report.Settings.UnitCostScale)),
+		ComparisonMode:      types.StringValue(report.Settings.ComparisonMode),
 	})
 	diags.Append(settingDiags...)
 	model.Settings = settings
@@ -757,11 +1097,17 @@ func unitCostLabelFilter(ctx context.Context, list types.List, diags *diag.Diagn
 }
 
 // unitCostLabelList is the API's label filter as unit_cost_label_filter: null when there is none,
-// as an unset attribute reads.
-func unitCostLabelList(ctx context.Context, filter []costfluent.UnitCostLabelCondition, diags *diag.Diagnostics) types.List {
+// as an unset attribute reads. The API trims every key and value and drops a repeated value, so a
+// configured filter that normalizes to the stored one is kept as configured.
+func unitCostLabelList(
+	ctx context.Context, configured types.List, filter []costfluent.UnitCostLabelCondition, diags *diag.Diagnostics,
+) types.List {
 	elementType := types.ObjectType{AttrTypes: costReportUnitCostLabelAttrTypes}
 	if len(filter) == 0 {
 		return types.ListNull(elementType)
+	}
+	if normalizesTo(ctx, configured, filter) {
+		return configured
 	}
 
 	models := make([]CostReportUnitCostLabelModel, len(filter))
@@ -776,8 +1122,42 @@ func unitCostLabelList(ctx context.Context, filter []costfluent.UnitCostLabelCon
 	return list
 }
 
+// normalizesTo reports whether the configured label filter is the stored one once the API has
+// normalized it, condition by condition: the key trimmed, and the values trimmed and each kept once,
+// in the order first given.
+func normalizesTo(ctx context.Context, configured types.List, stored []costfluent.UnitCostLabelCondition) bool {
+	if configured.IsNull() || configured.IsUnknown() {
+		return false
+	}
+	var conditions []CostReportUnitCostLabelModel
+	if configured.ElementsAs(ctx, &conditions, false).HasError() || len(conditions) != len(stored) {
+		return false
+	}
+	for i, condition := range conditions {
+		var values []string
+		if condition.Values.ElementsAs(ctx, &values, false).HasError() ||
+			strings.TrimSpace(condition.Key.ValueString()) != stored[i].Key {
+			return false
+		}
+		normalized := make([]string, 0, len(values))
+		for _, value := range values {
+			if value = strings.TrimSpace(value); !slices.Contains(normalized, value) {
+				normalized = append(normalized, value)
+			}
+		}
+		if !slices.Equal(normalized, stored[i].Values) {
+			return false
+		}
+	}
+	return true
+}
+
 // groupingList is the API's grouping as the group_by list. A dimension that differs from the
-// configured one only in case keeps the configured spelling, since the API reads both the same.
+// configured one only in case keeps the configured spelling, and a configured empty key stays empty
+// where the API answers none, since the API reads both the same.
+// Without a configured slot to take the case from, as on import, a dimension is spelled as
+// CostGroupDimensions and the group_by default spell it, not in the API's camelCase, so importing
+// a report whose configuration leaves group_by to its default plans nothing.
 func groupingList(ctx context.Context, prior types.List, slots []costfluent.Grouping) (types.List, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	var configured []CostReportGroupingModel
@@ -790,10 +1170,17 @@ func groupingList(ctx context.Context, prior types.List, slots []costfluent.Grou
 		dimension := slot.Dimension
 		if i < len(configured) && strings.EqualFold(configured[i].Dimension.ValueString(), dimension) {
 			dimension = configured[i].Dimension.ValueString()
+		} else {
+			dimension = canonicalGroupingDimension(dimension)
 		}
 		key := types.StringNull()
-		if slot.Key != nil && *slot.Key != "" {
+		// The API's key comes first: a slot configured with "" that the report now groups by a keyed
+		// dimension, changed outside Terraform, reads back that key rather than the configured "".
+		switch {
+		case slot.Key != nil && *slot.Key != "":
 			key = types.StringValue(*slot.Key)
+		case i < len(configured) && configured[i].Key.Equal(types.StringValue("")):
+			key = configured[i].Key
 		}
 		models[i] = CostReportGroupingModel{Dimension: types.StringValue(dimension), Key: key}
 	}
@@ -840,4 +1227,5 @@ var costReportSettingsAttrTypes = map[string]attr.Type{
 	"unit_cost_label_filter": types.ListType{ElemType: types.ObjectType{AttrTypes: costReportUnitCostLabelAttrTypes}},
 	"unit_cost_calculation":  types.StringType,
 	"unit_cost_scale":        types.Int64Type,
+	"comparison_mode":        types.StringType,
 }

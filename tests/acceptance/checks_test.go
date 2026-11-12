@@ -143,25 +143,35 @@ func testAccKeepsID(address string, id *string) resource.TestCheckFunc {
 	}
 }
 
-// testAccUseSampleKey runs the test with COSTFLUENT_ACC_SAMPLE_API_KEY, a "Read only" token of the
-// seeded sample organization, whose cost history holds the anomalies, commitments and savings
-// findings the acceptance organization has none of. Without TF_ACC the test skips first, as every
+// testAccRequireEnv returns the value of the environment variable name, which holds what an
+// acceptance test needs beyond COSTFLUENT_API_KEY. Without TF_ACC the test skips first, as every
 // acceptance test does, since CI's unit run sets CI but no TF_ACC. In an acceptance run without the
-// key the test fails under CI, so a runner that stops passing it cannot turn the findings tests into
-// silent skips, and skips elsewhere.
-func testAccUseSampleKey(t *testing.T) {
+// value the test fails under CI, so a runner that stops passing it cannot turn the tests that need
+// it into silent skips with the suite green, and skips elsewhere. TestAcceptanceSkipsFailUnderCI
+// refuses the t.Skip, t.Skipf and t.SkipNow calls written in the package's function declarations
+// outside this helper, the unset-TF_ACC branches and the tests it allows, and sees no other way a
+// test can skip.
+func testAccRequireEnv(t testing.TB, name, what string) string {
 	t.Helper()
 	if os.Getenv("TF_ACC") == "" {
 		t.Skip("acceptance tests run with TF_ACC set")
 	}
-	key := os.Getenv("COSTFLUENT_ACC_SAMPLE_API_KEY")
-	if key == "" {
+	value := os.Getenv(name)
+	if value == "" {
 		if os.Getenv("CI") != "" {
-			t.Fatal("COSTFLUENT_ACC_SAMPLE_API_KEY must hold the sample organization's Read only token under CI")
+			t.Fatalf("%s must hold %s under CI", name, what)
 		}
-		t.Skip("COSTFLUENT_ACC_SAMPLE_API_KEY holds no token of the seeded sample organization")
+		t.Skipf("%s is unset, and the test needs %s", name, what)
 	}
-	t.Setenv("COSTFLUENT_API_KEY", key)
+	return value
+}
+
+// testAccUseSampleKey runs the test with COSTFLUENT_ACC_SAMPLE_API_KEY, a "Read only" token of the
+// seeded sample organization, whose cost history holds the anomalies, commitments and savings
+// findings the acceptance organization has none of.
+func testAccUseSampleKey(t *testing.T) {
+	t.Helper()
+	t.Setenv("COSTFLUENT_API_KEY", testAccRequireEnv(t, "COSTFLUENT_ACC_SAMPLE_API_KEY", `the seeded sample organization's "Read only" token`))
 }
 
 // testAccCheckEveryElem checks that the list attribute list of address holds at least atLeast

@@ -1,13 +1,21 @@
 package acceptance
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 )
+
+// providerExists reads a connection by ID; connections belong to the organization, so the read
+// takes no workspace.
+var providerExists = existsByGet(func(c *costfluent.Client, ctx context.Context, _, id string) (*costfluent.Provider, error) {
+	return c.GetProvider(ctx, id)
+})
 
 // A custom connection needs no cloud, so it shows on the local stack that renaming a connection and
 // removing its description update the same connection rather than replacing it.
@@ -27,6 +35,7 @@ resource "costfluent_provider" "test" {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_provider", providerExists),
 		Steps: []resource.TestStep{
 			{
 				Config: config(rName, "  description = \"Billing exports\"\n"),

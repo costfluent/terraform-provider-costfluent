@@ -57,7 +57,7 @@ func TestCollectionKeepsWhatWasWritten(t *testing.T) {
 		t.Fatalf("delete = %d", status)
 	}
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
-		if status, body := call(t, s, method, "/v1/folders/"+id, `{}`); status != http.StatusNotFound || body["code"] != "NotFound" {
+		if status, body := call(t, s, method, "/v1/folders/"+id, `{}`); status != http.StatusNotFound || body["code"] != "not_found" {
 			t.Fatalf("%s after delete = %d %v", method, status, body)
 		}
 	}
@@ -235,6 +235,40 @@ func TestCustomHooksShapeTheStoredObjectAndResponses(t *testing.T) {
 	}
 }
 
+// A refused update answers the refusal and changes neither the object nor its version; one the
+// hook lets through applies.
+func TestRefuseAnswersARefusedUpdateAndChangesNothing(t *testing.T) {
+	s := New(t)
+	s.Collection("/v1/reports", Collection{
+		IDPrefix:  "crp_",
+		Versioned: true,
+		Refuse: func(obj, body map[string]any) *Response {
+			if obj["interval"] == "custom" && body["clear"] == true {
+				refusal := Problem(http.StatusBadRequest, "Validation", "A custom interval needs its dates")
+				return &refusal
+			}
+			return nil
+		},
+	})
+
+	_, created := call(t, s, http.MethodPost, "/v1/reports", `{"interval":"custom"}`)
+	id := created["id"].(string)
+	version := s.ETag("/v1/reports", id)
+	if status, body := call(t, s, http.MethodPut, "/v1/reports/"+id, `{"clear":true}`); status != http.StatusBadRequest ||
+		body["code"] != "Validation" {
+		t.Fatalf("refused update = %d %v", status, body)
+	}
+	if obj, _ := s.Get("/v1/reports", id); obj["clear"] != nil || s.ETag("/v1/reports", id) != version {
+		t.Fatalf("stored = %v at %s, want it unchanged at %s", obj, s.ETag("/v1/reports", id), version)
+	}
+	if status, _ := call(t, s, http.MethodPut, "/v1/reports/"+id, `{"interval":"lastMonth"}`); status != http.StatusOK {
+		t.Fatalf("allowed update = %d", status)
+	}
+	if obj, _ := s.Get("/v1/reports", id); obj["interval"] != "lastMonth" {
+		t.Fatalf("stored = %v", obj)
+	}
+}
+
 func TestFailNextAnswersOnceThenTheHandler(t *testing.T) {
 	s := New(t)
 	s.Handle("GET /v1/ping/{name}", func(r Request) Response {
@@ -358,6 +392,21 @@ func TestNewServesAnOrganizationTokenByDefault(t *testing.T) {
 	if _, me := call(t, s, http.MethodGet, "/v1/me", ""); me["tokenType"] != costfluent.TokenTypeWorkspace ||
 		me["organizationId"] == "" || len(me["capabilities"].([]any)) != 1 {
 		t.Fatalf("overridden me = %v", me)
+	}
+}
+
+func TestCarriesAnswersForTheTokenMeDescribes(t *testing.T) {
+	s := New(t)
+	if !s.Carries(costfluent.CapabilityViewWorkspace) || !s.Carries(costfluent.CapabilityViewCosts) {
+		t.Fatal("the default token carries every capability, Carries says otherwise")
+	}
+
+	s.Me(costfluent.Me{TokenType: costfluent.TokenTypeOrganization, TokenName: "narrow", Capabilities: []costfluent.Capability{costfluent.CapabilityViewCosts}})
+	if !s.Carries(costfluent.CapabilityViewCosts) {
+		t.Error("Carries(viewCosts) = false for a token granted it")
+	}
+	if s.Carries(costfluent.CapabilityViewWorkspace) {
+		t.Error("Carries(viewWorkspace) = true for a token without it")
 	}
 }
 

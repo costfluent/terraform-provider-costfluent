@@ -3,7 +3,6 @@ package acceptance
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -19,11 +18,7 @@ import (
 // also administers teams and apps, which the "Read and write" preset in COSTFLUENT_API_KEY does not.
 func testAccUseAdminKey(t *testing.T) {
 	t.Helper()
-	key := os.Getenv("COSTFLUENT_ACC_ADMIN_API_KEY")
-	if key == "" {
-		t.Skip("COSTFLUENT_ACC_ADMIN_API_KEY holds no token that administers teams and apps")
-	}
-	t.Setenv("COSTFLUENT_API_KEY", key)
+	t.Setenv("COSTFLUENT_API_KEY", testAccRequireEnv(t, "COSTFLUENT_ACC_ADMIN_API_KEY", "an organization token that administers teams and apps"))
 }
 
 func teamExists(ctx context.Context, c *costfluent.Client, _, id string) (bool, error) {

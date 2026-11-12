@@ -39,12 +39,12 @@ resource "costfluent_cost_report" "cost_per_customer" {
 
 ### Required
 
-- `name` (String) Metric name.
-- `unit` (String) What one unit counts, in the singular, such as customer or transaction.
+- `name` (String) Metric name, not blank.
+- `unit` (String) What one unit counts, in the singular, such as customer or transaction. Not blank.
 
 ### Optional
 
-- `label_columns` (List of String) Up to five columns each value is labeled by, such as customer or region. Every stored value is keyed by them, so changing them replaces the metric and its values.
+- `label_columns` (List of String) Up to 5 columns each value is labeled by, such as customer or region. Each is named, at most 100 characters, does not start like a spreadsheet formula (=, +, - or @, unless it is a number), is not date or amount in any case, and differs from the others ignoring case. Every stored value is keyed by them, so changing them replaces the metric and its values.
 - `workspace_id` (String) Workspace ID. When omitted, the provider's default workspace at creation is recorded and kept, so a later change to the provider's default does not move it.
 
 ### Read-Only

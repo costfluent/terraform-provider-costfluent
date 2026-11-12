@@ -32,6 +32,12 @@ func TestAccGcpServiceAccount_basic(t *testing.T) {
 				Config:   `resource "costfluent_gcp_service_account" "this" {}`,
 				PlanOnly: true,
 			},
+			{
+				// A refresh provisions again, so a plan recreates an account Costfluent reclaimed.
+				RefreshState: true,
+				Check: resource.TestCheckResourceAttrPair(
+					"costfluent_gcp_service_account.this", "id", "costfluent_gcp_service_account.this", "email"),
+			},
 		},
 	})
 }

@@ -13,12 +13,25 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
+var costAlertExists = existsByGet((*costfluent.Client).GetCostAlert)
+
 func TestAccCostAlert_basic(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
+	var created trackedObject
+	defaulted := fmt.Sprintf(`  name              = %q
+  threshold_type    = "percentageIncrease"
+  threshold_value   = 20
+  comparison_period = "previousWeek"
+`, rName+" default")
+	// The alert in the default workspace stays, so its provider configuration is still there when
+	// the post-test destroy needs it.
+	removed := testAccDefaultWorkspaceStep(testAccWorkspaceFixture(rName), "costfluent_cost_alert", defaulted)
+	removed.Check = resource.ComposeTestCheckFunc(removed.Check, testAccCheckRemoved(&created, costAlertExists))
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_cost_alert", costAlertExists),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccCostAlertConfig(rName, 20, false, "50"),
@@ -31,6 +44,7 @@ func TestAccCostAlert_basic(t *testing.T) {
 					resource.TestCheckResourceAttr("costfluent_cost_alert.test", "minimum_amount", "50"),
 					resource.TestCheckResourceAttr("costfluent_cost_alert.test", "evaluation_frequency_minutes", "360"),
 					resource.TestCheckResourceAttr("costfluent_cost_alert.test", "is_paused", "false"),
+					testAccRemember("costfluent_cost_alert.test", &created),
 				),
 			},
 			{
@@ -48,11 +62,8 @@ func TestAccCostAlert_basic(t *testing.T) {
 					resource.TestCheckResourceAttr("costfluent_cost_alert.test", "is_paused", "true"),
 				),
 			},
-			testAccDefaultWorkspaceStep(testAccCostAlertConfig(rName, 35, true, ""), "costfluent_cost_alert", fmt.Sprintf(`  name              = %q
-  threshold_type    = "percentageIncrease"
-  threshold_value   = 20
-  comparison_period = "previousWeek"
-`, rName+" default")),
+			testAccDefaultWorkspaceStep(testAccCostAlertConfig(rName, 35, true, ""), "costfluent_cost_alert", defaulted),
+			removed,
 		},
 	})
 }
@@ -95,6 +106,7 @@ resource "costfluent_cost_alert" "test" {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_cost_alert", costAlertExists),
 		Steps: []resource.TestStep{
 			{
 				Config: config(withBoth),
@@ -127,6 +139,7 @@ func TestAccCostAlert_refusalNamesTheField(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_cost_alert", costAlertExists),
 		Steps: []resource.TestStep{{
 			Config: testAccWorkspaceFixture(rName) + fmt.Sprintf(`
 resource "costfluent_cost_alert" "test" {
@@ -169,6 +182,7 @@ resource "costfluent_cost_alert" "test" {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_cost_alert", costAlertExists),
 		Steps: []resource.TestStep{
 			{
 				Config: config(testAccCostReportJSONFilter),

@@ -16,16 +16,27 @@ terraform {
   required_providers {
     costfluent = {
       source  = "costfluent/costfluent"
-      version = "~> 0.3.0"
+      version = "~> 0.6.0"
     }
   }
 }
 ```
 
 Until 1.0, a minor version may need changes to your configuration, so pin the minor version as
-above: `~> 0.3.0` takes patch versions only, and a patch version never does. Each minor version
-that needs changes has an upgrade guide: [Upgrading from 0.2](docs/guides/upgrade-from-0.2.md) for
-0.2.x to 0.3.0, and [Upgrading from 0.3](docs/guides/upgrade-from-0.3.md) for 0.3.x to 0.4.0.
+the `version` line above does: it takes patch versions only, and a patch version never does. Each
+minor version that needs changes has an upgrade guide: [Upgrading from 0.2](docs/guides/upgrade-from-0.2.md)
+for 0.2.x to 0.3.0, and [Upgrading from 0.3](docs/guides/upgrade-from-0.3.md) for 0.3.x to 0.4.0.
+
+### Verifying a release
+
+Terraform checks each provider zip against the release's GPG-signed `SHA256SUMS`. Each release also
+carries a build provenance attestation, which shows that its zips, its `SHA256SUMS` and the SPDX SBOM
+beside each zip (`<zip>.sbom.json`) were built from the tagged source by this repository's release
+workflow. A release without one predates the attestations.
+
+```bash
+gh attestation verify terraform-provider-costfluent_<version>_<os>_<arch>.zip --repo costfluent/terraform-provider-costfluent
+```
 
 ### Local Development
 
@@ -104,7 +115,7 @@ data "costfluent_aws_provider_info" "this" {}
 
 module "costfluent_aws" {
   source  = "costfluent/cost-access/aws"
-  version = "~> 0.2"
+  version = "~> 0.5"
 
   costfluent_principal_arn = data.costfluent_aws_provider_info.this.principal_arn
   external_id              = data.costfluent_aws_provider_info.this.external_id
@@ -123,11 +134,11 @@ resource "costfluent_provider" "aws" {
 
 ```hcl
 resource "costfluent_budget" "monthly" {
-  workspace_id = costfluent_workspace.production.id
-  name         = "Monthly Budget"
-  amount       = "10000"
-  currency     = "EUR"
-  period       = "Monthly"
+  workspace_id  = costfluent_workspace.production.id
+  name          = "Monthly Budget"
+  amount        = "10000"
+  currency      = "EUR"
+  interval_unit = "month"
 
   alerts = [
     { threshold_percent = 80 },

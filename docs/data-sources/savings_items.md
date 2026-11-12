@@ -43,7 +43,7 @@ output "rightsizing_monthly_savings" {
 ### Optional
 
 - `cloud_account_id` (String) Only findings the provider of this connection generated. An unknown connection matches no finding.
-- `kind` (String) Only findings of this kind, such as rightsizing, idle, generational, storage, commitmentPurchase, extendedSupport or other.
+- `kind` (String) Only findings of this kind, such as rightsizing, idle, generational, storage, commitmentPurchase, extendedSupport, pricingTier or other.
 - `minimum_monthly_saving` (String) Only findings estimated to save at least this much each month, in each finding's own currency, as a decimal string such as "100".
 - `sort` (String) The order: newest (the default) or largestSaving.
 - `source` (String) Only findings from this source, such as operator, billingAnalysis or a provider's engine (awsCostOptimizationHub, azureAdvisor, gcpRecommender).

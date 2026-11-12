@@ -54,7 +54,7 @@ resource "costfluent_virtual_tag" "team" {
 
 - `collapsed_tag_keys` (List of String) Provider tag keys read in order before any rule; the first a row carries gives its value, so team and Team can be one tag. At most 10.
 - `default_value` (String) Value for rows no collapsed key or rule claims. Unset, such rows have an empty value.
-- `description` (String) Virtual tag description.
+- `description` (String) Virtual tag description, at most 1000 characters. Leave it unset for none: an empty or whitespace-only value is refused.
 - `rule` (Block List) Rules in evaluation order; the first whose filter matches assigns its value. At most 50, with at most 50 filter clauses across them. A virtual tag needs at least one rule or one collapsed tag key. (see [below for nested schema](#nestedblock--rule))
 - `workspace_id` (String) Workspace ID. When omitted, the provider's default workspace at creation is recorded and kept, so a later change to the provider's default does not move it.
 

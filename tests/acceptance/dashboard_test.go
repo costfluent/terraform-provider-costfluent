@@ -24,7 +24,7 @@ func TestAccDashboard_lifecycle(t *testing.T) {
 		CheckDestroy:             testAccCheckGone("costfluent_dashboard", dashboardExists),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccDashboardConfig(rName, rName, "day"),
+				Config: testAccDashboardConfig(rName, rName, "thisMonth", "day"),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttrSet("costfluent_dashboard.test", "id"),
 					resource.TestCheckResourceAttr("costfluent_dashboard.test", "title", rName),
@@ -36,7 +36,7 @@ func TestAccDashboard_lifecycle(t *testing.T) {
 			},
 			testAccImportPlansNothing("costfluent_dashboard.test"),
 			{
-				Config: testAccDashboardConfig(rName, rName+" renamed", "week"),
+				Config: testAccDashboardConfig(rName, rName+" renamed", "thisMonth", "week"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
 						plancheck.ExpectResourceAction("costfluent_dashboard.test", plancheck.ResourceActionUpdate),
@@ -53,6 +53,41 @@ func TestAccDashboard_lifecycle(t *testing.T) {
 			},
 			testAccDefaultWorkspaceStep(testAccWorkspaceFixture(rName), "costfluent_dashboard",
 				fmt.Sprintf("  title = %q\n", rName+" default")),
+		},
+	})
+}
+
+// A dashboard saved over the range that runs to the end of next month, then updated in place to the
+// three whole months before this one, keeps each window: the API stores and reads back both members
+// in the spelling written, so an import after either plans nothing.
+func TestAccDashboard_forwardRange(t *testing.T) {
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_dashboard", dashboardExists),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccDashboardConfig(rName, rName, "throughNextMonth", "day"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttrSet("costfluent_dashboard.test", "id"),
+					resource.TestCheckResourceAttr("costfluent_dashboard.test", "date_interval", "throughNextMonth"),
+				),
+			},
+			testAccImportPlansNothing("costfluent_dashboard.test"),
+			{
+				Config: testAccDashboardConfig(rName, rName, "last3CompleteMonths", "day"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("costfluent_dashboard.test", plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_dashboard.test", "date_interval", "last3CompleteMonths"),
+				),
+			},
+			testAccImportPlansNothing("costfluent_dashboard.test"),
 		},
 	})
 }
@@ -220,13 +255,13 @@ resource "costfluent_dashboard_widget" "text" {
 `
 }
 
-func testAccDashboardConfig(name, title, dateBin string) string {
+func testAccDashboardConfig(name, title, dateInterval, dateBin string) string {
 	return testAccWorkspaceFixture(name) + fmt.Sprintf(`
 resource "costfluent_dashboard" "test" {
   workspace_id  = costfluent_workspace.fixture.id
   title         = %q
-  date_interval = "thisMonth"
+  date_interval = %q
   date_bin      = %q
 }
-`, title, dateBin)
+`, title, dateInterval, dateBin)
 }
