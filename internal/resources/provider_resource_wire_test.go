@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/fakeapi"
 	"github.com/costfluent/terraform-provider-costfluent/internal/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
@@ -103,6 +104,42 @@ func TestProviderKeyOutsideTheContractIsRefusedAtPlan(t *testing.T) {
 				PlanOnly:    true,
 				ExpectError: regexp.MustCompile(`value must be one of`),
 			},
+		},
+	})
+}
+
+// A 404 the API answers with a code other than not_found, as for a path the deployed API does not
+// serve when the provider is newer than it, says nothing about the object: a refresh that took it as
+// gone would forget a provider that still exists, and a destroy would leave it running unmanaged.
+func TestProviderOnARouteTheAPIDoesNotServeIsNeitherForgottenNorDeleted(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	fakeProviders(api)
+	unserved := func(method string) func() {
+		return func() {
+			api.FailNext(method, "/v1/providers/"+providerOnlyID(t, api),
+				fakeapi.Problem(http.StatusNotFound, "operation_not_found", "No operation matches this path"))
+		}
+	}
+	config := providerLifecycleConfig(api, providerRoleArn, "")
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: config},
+			{
+				PreConfig:   unserved(http.MethodGet),
+				Config:      config,
+				ExpectError: regexp.MustCompile(`Failed to read provider(.|\n)*No operation matches this path`),
+			},
+			// Still in state and on the API: the next plan is empty.
+			{Config: config, PlanOnly: true},
+			{
+				PreConfig:   unserved(http.MethodDelete),
+				Config:      api.ProviderBlock(),
+				ExpectError: regexp.MustCompile(`Failed to delete provider(.|\n)*No operation matches this path`),
+			},
+			{Config: config, PlanOnly: true},
 		},
 	})
 }

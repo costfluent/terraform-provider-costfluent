@@ -87,7 +87,7 @@ var resourceOperations = map[string]struct {
 		[]string{"PUT /v1/folders/{folderId}/saved-filter"}},
 	"costfluent_gcp_service_account": {resources.NewGcpServiceAccountResource,
 		[]string{"POST /v1/providers/gcp/service-account"},
-		nil,
+		[]string{"POST /v1/providers/gcp/service-account"},
 		nil,
 		nil,
 		nil},
@@ -157,6 +157,14 @@ var resourceOperations = map[string]struct {
 		[]string{"PUT /v1/workspace-providers/{workspaceProviderId}"},
 		[]string{"DELETE /v1/workspace-providers/{workspaceProviderId}"},
 		[]string{"PUT /v1/workspace-providers/{workspaceProviderId}"}},
+}
+
+// readFilters is, per resource, what reading it back needs beyond what its read operations
+// declare: a capability the API filters a list by, answering a token without it an empty list
+// rather than a 403, so the resource could not tell its object from one removed. A read operation's
+// description must state each, as "none for a token without <capability>".
+var readFilters = map[string][]string{
+	"costfluent_team_workspace_access": {"viewWorkspace"},
 }
 
 type declaredOperation struct {
@@ -295,6 +303,17 @@ func TestEveryResourceDeclaresWhatItsOperationsNeed(t *testing.T) {
 			"create": declared("create", r.create), "read": declared("read", r.read),
 			"update": declared("update", r.update), "delete": declared("delete", r.delete),
 			"conditional": declared("conditional", r.conditional),
+		}
+		for _, filter := range readFilters[name] {
+			stated := slices.ContainsFunc(r.read, func(key string) bool {
+				return strings.Contains(operations[key].Description, "none for a token without "+filter)
+			})
+			if !stated {
+				t.Errorf("%s: reads back through a filter on %s, which no read operation's description states", name, filter)
+			}
+			if !slices.Contains(want["read"], filter) {
+				want["read"] = append(want["read"], filter)
+			}
 		}
 		// A resource only its create makes organization-level is wholly so unless a workspace token
 		// may take one of its other actions.

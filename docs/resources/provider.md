@@ -56,7 +56,7 @@ resource "costfluent_provider" "azure" {
 
 ### Required
 
-- `credentials` (Map of String, Sensitive) Provider credentials: role_arn for AWS; tenant, appId and password for Azure; billing_account_id, project_id and bigquery_dataset for GCP; admin_key for Anthropic and OpenAI. Sensitive hides them from plan output, but the Terraform state holds them in plaintext, so keep state in an encrypted backend with restricted access.
+- `credentials` (Map of String, Sensitive) Provider credentials: role_arn for AWS; tenant, appId and password for Azure; billing_account_id, project_id and bigquery_dataset for GCP; admin_key for Anthropic, OpenAI and Cursor. Sensitive hides them from plan output, but the Terraform state holds them in plaintext, so keep state in an encrypted backend with restricted access.
 - `display_name` (String) Display name for the provider. Changing it renames the connection in place; it keeps its ID and the costs it has collected.
 - `key` (String) Provider type key (e.g., aws, azure, gcp, kubernetes), as the Public API spells it.
 

@@ -43,10 +43,14 @@ type TeamWorkspaceAccessResourceModel struct {
 }
 
 func NewTeamWorkspaceAccessResource() resource.Resource {
+	// Reading needs viewWorkspace although the list declares viewMembers only: the list answers a
+	// token without viewWorkspace none of the team's grants, so Read fails for such a token rather than
+	// lose a grant it cannot see. Declared here, the plan refuses to create or change a grant under
+	// such a token; without it the create would succeed and every later refresh would then fail.
 	return &TeamWorkspaceAccessResource{managed{name: "team_workspace_access", needs: Needs{
 		Organization: true,
 		Create:       []costfluent.Capability{costfluent.CapabilityManageWorkspaceAccess},
-		Read:         []costfluent.Capability{costfluent.CapabilityViewMembers},
+		Read:         []costfluent.Capability{costfluent.CapabilityViewMembers, costfluent.CapabilityViewWorkspace},
 		Update:       []costfluent.Capability{costfluent.CapabilityManageWorkspaceAccess},
 		Delete:       []costfluent.Capability{costfluent.CapabilityManageWorkspaceAccess},
 		Conditional: []Conditional{
@@ -161,6 +165,17 @@ func (r *TeamWorkspaceAccessResource) Read(ctx context.Context, req resource.Rea
 			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 			return
 		}
+	}
+	// The API lists only the grants on workspaces the token can view, none for a token without
+	// viewWorkspace, so for such a token a missing grant proves nothing. Removing it from state here
+	// would turn the next removal or destroy into a success that sends no DELETE while the team keeps
+	// its access. Failing, as a 403 from the API would, keeps the grant in state until the token can.
+	if !r.me.Can(costfluent.CapabilityViewWorkspace) {
+		resp.Diagnostics.AddError("Failed to read team workspace access", fmt.Sprintf(
+			"The API token lacks `%s`; create a token that carries it in Settings, API tokens. Without it the API "+
+				"lists none of a team's workspace access, so the access of %s on %s cannot be read, nor told from "+
+				"access removed.", costfluent.CapabilityViewWorkspace, state.TeamID.ValueString(), state.WorkspaceID.ValueString()))
+		return
 	}
 	resp.State.RemoveResource(ctx)
 }

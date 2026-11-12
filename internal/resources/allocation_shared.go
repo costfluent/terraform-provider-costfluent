@@ -108,6 +108,16 @@ func sameEnum(configured types.String, returned string) types.String {
 	return types.StringValue(returned)
 }
 
+// sameTrimmed keeps the configured spelling of a text the API trims before it stores it and answers
+// trimmed, so a configured value padded with whitespace, as a heredoc's trailing newline pads it,
+// plans no change against the stored one. Any other difference is written back as stored.
+func sameTrimmed(configured types.String, returned string) types.String {
+	if !configured.IsNull() && !configured.IsUnknown() && strings.TrimSpace(configured.ValueString()) == returned {
+		return configured
+	}
+	return types.StringValue(returned)
+}
+
 // sameTimeZone keeps the configured spelling of the zone the API stores under its own id: the API
 // trims a zone and can answer a case variant in its canonical case. An alias such as US/Eastern is
 // an id of its own there, so only spelling is folded, never one zone into another.

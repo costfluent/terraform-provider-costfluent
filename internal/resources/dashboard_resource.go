@@ -95,8 +95,10 @@ func (r *DashboardResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"date_interval": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
-				Description: "Window the dashboard shows: thisMonth, lastMonth, last7Days, last30Days, last90Days, " +
-					"thisQuarter, lastQuarter, yearToDate, thisYear, lastYear or custom.",
+				Description: "Window the dashboard shows, such as last30Days, last3CompleteMonths (the three whole months " +
+					"before this one), throughNext3Months (the first of this month to the last day of the third month " +
+					"after it; a widget whose report shows its forecast fills the days to come) or custom. " +
+					"https://docs.costfluent.com/api/dashboards lists every value.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},

@@ -227,9 +227,10 @@ func (d *CostDataDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
+	slotByCanonical := slotsByCanonicalKey(slots)
 	rows := make([]CostDataRowModel, len(result.Data))
 	for i, row := range result.Data {
-		dims, diags := types.MapValueFrom(ctx, types.StringType, row.Dimensions)
+		dims, diags := types.MapValueFrom(ctx, types.StringType, keyBySlot(row.Dimensions, slotByCanonical))
 		resp.Diagnostics.Append(diags...)
 		rows[i] = CostDataRowModel{
 			Date:          types.StringValue(row.Date),
@@ -250,4 +251,43 @@ func (d *CostDataDataSource) Read(ctx context.Context, req datasource.ReadReques
 	config.Currency = types.StringValue(result.Meta.Currency)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
+}
+
+// slotsByCanonicalKey maps the key the API answers each slot under to the slot as configured. The
+// API reads a dimension case-insensitively but keys every row by its canonical name (serviceName
+// comes back as ServiceName), while group_by promises the slot as written, so without this a lookup
+// by a non-canonical slot finds nothing. The key after the first colon comes back as sent.
+func slotsByCanonicalKey(slots []string) map[string]string {
+	bySlot := make(map[string]string, len(slots))
+	for _, slot := range slots {
+		dimension, key, keyed := strings.Cut(slot, ":")
+		for _, canonical := range costfluent.CostGroupDimensions() {
+			if strings.EqualFold(dimension, canonical) {
+				dimension = canonical
+				break
+			}
+		}
+		grouping := costfluent.Grouping{Dimension: dimension}
+		if keyed {
+			grouping.Key = &key
+		}
+		bySlot[grouping.String()] = slot
+	}
+	return bySlot
+}
+
+// keyBySlot re-keys a row's dimensions by the configured slots; a key no slot claims is kept as the
+// API wrote it.
+func keyBySlot(dimensions map[string]string, slotByCanonical map[string]string) map[string]string {
+	if dimensions == nil {
+		return nil
+	}
+	keyed := make(map[string]string, len(dimensions))
+	for key, value := range dimensions {
+		if slot, ok := slotByCanonical[key]; ok {
+			key = slot
+		}
+		keyed[key] = value
+	}
+	return keyed
 }

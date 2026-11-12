@@ -59,7 +59,7 @@ resource "costfluent_dashboard" "production" {
 ### Optional
 
 - `date_bin` (String) Period each point covers: day, week, month or quarter.
-- `date_interval` (String) Window the dashboard shows: thisMonth, lastMonth, last7Days, last30Days, last90Days, thisQuarter, lastQuarter, yearToDate, thisYear, lastYear or custom.
+- `date_interval` (String) Window the dashboard shows, such as last30Days, last3CompleteMonths (the three whole months before this one), throughNext3Months (the first of this month to the last day of the third month after it; a widget whose report shows its forecast fills the days to come) or custom. https://docs.costfluent.com/api/dashboards lists every value.
 - `end_date` (String) Last day of a custom date_interval, YYYY-MM-DD; required with custom and ignored otherwise.
 - `is_default` (Boolean) Whether this is the workspace's default dashboard, of which a workspace has at most one. True makes it the default in place, taking the default from the dashboard that had it, and an apply takes it back when another dashboard has become the default since. False clears it, leaving the workspace without a default. Omitted, it follows the workspace: a default moved to or from it elsewhere plans no change. Set is_default = true on at most one dashboard per workspace, or they take the default from each other on every apply.
 - `saved_filter_id` (String) ID of a saved filter in the same workspace. Every report widget on the dashboard is read through it, on top of its report's own filter. Remove it to detach the filter.

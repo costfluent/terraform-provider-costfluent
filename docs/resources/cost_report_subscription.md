@@ -47,7 +47,7 @@ resource "costfluent_cost_report_subscription" "weekly" {
 
 ### Required
 
-- `app_ids` (List of String) The email, Slack or Teams apps each delivery goes to, at least one.
+- `app_ids` (List of String) The email, Slack or Teams apps each delivery goes to, at least one, each listed once.
 - `cost_report_id` (String) The saved cost report delivered. Changing it recreates the notification.
 - `name` (String) Notification name.
 - `schedule_type` (String) One of daily, weekly or monthly.

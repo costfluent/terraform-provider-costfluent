@@ -1355,7 +1355,7 @@ func TestBudgetAPIErrorsBecomeDiagnostics(t *testing.T) {
 			{
 				PreConfig: func() {
 					api.FailNext(http.MethodPut, "/v1/budgets/"+budgetOnlyID(t, api),
-						fakeapi.Problem(http.StatusNotFound, "NotFound", "Segment not found"))
+						fakeapi.Problem(http.StatusNotFound, "not_found", "Segment not found"))
 				},
 				Config:      budgetConfig(api, "Platform", "600", ""),
 				ExpectError: regexp.MustCompile(`Failed to update budget(.|\n)*Segment not found`),
@@ -1435,4 +1435,46 @@ func TestBudgetUpdateSendsTheVersionItReadAndStopsOnAnOutsideChange(t *testing.T
 			},
 		},
 	})
+}
+
+// The API stores a budget amount to the cent and refuses one that is not above zero, is finer
+// than the cent or has more than 16 integer digits. The provider refuses the same amounts at plan,
+// as amount and as a period's amount, on create and on update, so none of them reaches the API.
+func TestBudgetAmountOutsideTheAPIsRuleIsRefusedAtPlan(t *testing.T) {
+	t.Parallel()
+
+	for _, amount := range []string{"0", "-5", "1250.125", "10000000000000000"} {
+		t.Run(amount, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			fakeBudgets(api)
+			want := regexp.MustCompile(`(?s)Invalid amount.*amount\s*=\s*"` + regexp.QuoteMeta(amount) + `".*must\s+be\s+a\s+decimal\s+amount\s+above\s+0\s+with\s+at\s+most\s+two\s+decimals\s+and\s+16\s+integer\s+digits`)
+			refused := func(config string) resource.TestStep {
+				return resource.TestStep{Config: config, ExpectError: want}
+			}
+
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{
+					refused(budgetConfig(api, "Platform", amount, "")),
+					refused(budgetPeriodsConfig(api, "month", amount)),
+					{Config: budgetConfig(api, "Platform", "500", "")},
+					refused(budgetConfig(api, "Platform", amount, "")),
+					refused(budgetPeriodsConfig(api, "month", amount)),
+					{
+						PreConfig: func() {
+							if posts := api.Requests(http.MethodPost, ""); len(posts) != 1 {
+								t.Errorf("refused amounts sent creates: %d creates, want the valid one alone", len(posts))
+							}
+							if puts := api.Requests(http.MethodPut, ""); len(puts) != 0 {
+								t.Errorf("refused amounts sent %d updates", len(puts))
+							}
+						},
+						Config:   budgetConfig(api, "Platform", "500", ""),
+						PlanOnly: true,
+					},
+				},
+			})
+		})
+	}
 }

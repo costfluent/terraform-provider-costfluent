@@ -34,17 +34,28 @@ builds:
     binary: '{{ .ProjectName }}_v{{ .Version }}'
 
 archives:
-  - formats: [zip]
+  - id: provider
+    formats: [zip]
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 
 checksum:
   name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
   algorithm: sha256
+  # The registry ingests this signed file, and it has only ever listed the zips and the manifest.
+  # Without the filter GoReleaser lists every SBOM here too; the release workflow attests the SBOMs
+  # by path instead, so the file the registry reads keeps the shape it has always accepted.
+  ids:
+    - provider
   # The Terraform Registry requires every release artifact, including the protocol manifest, in
   # the signed checksum file. release.extra_files uploads it but does not checksum it implicitly.
   extra_files:
     - glob: terraform-registry-manifest.json
       name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+
+# An SPDX SBOM per zip, written by the syft the release workflow installs from a pinned,
+# checksum-verified binary, and covered by the workflow's provenance attestation.
+sboms:
+  - artifacts: archive
 
 signs:
   - artifacts: checksum

@@ -153,6 +153,37 @@ func TestCostReportUpgradeState_v0LeavesTheChartAxisToTheNextRead(t *testing.T) 
 	}
 }
 
+// v0.2.1 predates the comparison mode: the upgraded settings carry it null for the next read to
+// fill in, beside the flags v0.2.1 stored.
+func TestCostReportUpgradeState_v0LeavesTheComparisonModeToTheNextRead(t *testing.T) {
+	t.Parallel()
+	_, server, upgraded := upgradeCostReportState(t, v021CostReportState("ServiceName"))
+
+	schemas, err := server.GetProviderSchema(context.Background(), &tfprotov6.GetProviderSchemaRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := upgraded.UpgradedState.Unmarshal(schemas.ResourceSchemas["costfluent_cost_report"].ValueType())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attrs, settings map[string]tftypes.Value
+	if err := value.As(&attrs); err != nil {
+		t.Fatal(err)
+	}
+	if err := attrs["settings"].As(&settings); err != nil {
+		t.Fatal(err)
+	}
+	mode, ok := settings["comparison_mode"]
+	if !ok || !mode.IsNull() {
+		t.Fatalf("settings.comparison_mode = %v (present %t), want null", mode, ok)
+	}
+	var tax bool
+	if err := settings["include_tax"].As(&tax); err != nil || !tax {
+		t.Fatalf("settings.include_tax = %t (%v), want v0.2.1's true carried over", tax, err)
+	}
+}
+
 func TestCostReportUpgradeState_v0GroupByNullBecomesNoSlots(t *testing.T) {
 	t.Parallel()
 	slots := upgradeCostReport(t, v021CostReportState(nil))

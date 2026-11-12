@@ -23,7 +23,9 @@ import (
 // plans send (a CQL filter's translation, a saved filter or settings applied right after a create,
 // a link created disabled, a link's accounts changed), each required exactly when the plan sends
 // it. capabilities_test.go holds every declaration to the Public API contract's
-// x-costfluent-capability and x-costfluent-scope.
+// x-costfluent-capability and x-costfluent-scope, with one exception: a read also needs a
+// capability its list is filtered by, which answers a token without it an empty list rather than a
+// 403, as the operation's description states (that test's readFilters).
 type Needs struct {
 	Organization                 bool
 	OrganizationCreate           bool

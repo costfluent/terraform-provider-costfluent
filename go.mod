@@ -2,7 +2,7 @@ module github.com/costfluent/terraform-provider-costfluent
 
 go 1.26.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.16.1

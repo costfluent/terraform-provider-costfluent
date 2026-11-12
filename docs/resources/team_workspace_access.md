@@ -3,12 +3,12 @@
 page_title: "costfluent_team_workspace_access Resource - Costfluent"
 subcategory: ""
 description: |-
-  Manages what one team's members may do in one workspace. Needs an organization token with manageWorkspaceAccess, viewMembers and viewDashboards.
+  Manages what one team's members may do in one workspace. Needs an organization token with manageWorkspaceAccess, viewMembers, viewWorkspace and viewDashboards.
 ---
 
 # costfluent_team_workspace_access (Resource)
 
-Manages what one team's members may do in one workspace. Needs an organization token with `manageWorkspaceAccess`, `viewMembers` and `viewDashboards`.
+Manages what one team's members may do in one workspace. Needs an organization token with `manageWorkspaceAccess`, `viewMembers`, `viewWorkspace` and `viewDashboards`.
 
 ## Example Usage
 

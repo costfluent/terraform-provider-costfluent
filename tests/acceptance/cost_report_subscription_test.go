@@ -2,7 +2,6 @@ package acceptance
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
@@ -13,10 +12,7 @@ import (
 var subscriptionExists = existsByGet((*costfluent.Client).GetCostReportSubscription)
 
 func TestAccCostReportSubscription_lifecycle(t *testing.T) {
-	appID := os.Getenv("COSTFLUENT_ACC_APP_ID")
-	if appID == "" {
-		t.Skip("COSTFLUENT_ACC_APP_ID names no email channel")
-	}
+	appID := testAccRequireEnv(t, "COSTFLUENT_ACC_APP_ID", "the id of an email channel of the acceptance organization")
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 	var created trackedObject
 

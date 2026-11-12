@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/fakeapi"
@@ -322,4 +323,78 @@ func TestVirtualTagCreateWhoseFilterTranslationFailsIsTainted(t *testing.T) {
 	virtualTagFake(api)
 	createWhoseFilterTranslationFailsIsTainted(t, api, "/v1/virtual-tags", "vtag_", "costfluent_virtual_tag.t",
 		virtualTagConfig(api, ""), "Failed to compare a virtual tag rule filter")
+}
+
+// The API stores a blank description as none and refuses one over 1,000 characters, counted in UTF-16
+// code units, so a plan that let either through would save the tag and then fail the apply as an
+// inconsistent result, or fail it on the API's refusal. Both are refused at plan, before any request.
+func TestVirtualTagRefusesABlankOrOverlongDescriptionAtPlan(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, description, want string
+	}{
+		{"empty", "", `must\s+not\s+be\s+blank`},
+		{"spaces", "  ", `must\s+not\s+be\s+blank`},
+		{"tab and newline", "\t\n", `must\s+not\s+be\s+blank`},
+		{"no-break space", " ", `must\s+not\s+be\s+blank`},
+		{"ideographic space", "　", `must\s+not\s+be\s+blank`},
+		{"vertical tab", "\v", `must\s+not\s+be\s+blank`},
+		{"next line", "\u0085", `must\s+not\s+be\s+blank`},
+		{"line separator", "\u2028", `must\s+not\s+be\s+blank`},
+		{"over the limit", strings.Repeat("x", 1001), `must\s+be\s+1\s+to\s+1000\s+characters\s+\(UTF-16\s+code\s+units\),\s+got:\s+1001`},
+		{"astral letters over the limit", strings.Repeat("😀", 501), `must\s+be\s+1\s+to\s+1000\s+characters\s+\(UTF-16\s+code\s+units\),\s+got:\s+1002`},
+		{"one astral letter over the limit", strings.Repeat("a", 999) + "😀", `must\s+be\s+1\s+to\s+1000\s+characters\s+\(UTF-16\s+code\s+units\),\s+got:\s+1001`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			virtualTagFake(api)
+			// HCL has no \v escape, which %q writes for a vertical tab; \u000b is the escape HCL reads.
+			quoted := strings.ReplaceAll(fmt.Sprintf("%q", tc.description), `\v`, `\u000b`)
+
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{
+					{
+						Config:      virtualTagConfig(api, "  description = "+quoted+"\n"),
+						PlanOnly:    true,
+						ExpectError: regexp.MustCompile(`Attribute\s+description\s+` + tc.want),
+					},
+				},
+			})
+			if sent := api.Requests("", ""); len(sent) != 0 {
+				t.Fatalf("plan sent %s %s, want no request", sent[0].Method, sent[0].Path)
+			}
+		})
+	}
+}
+
+// A description the API stores as written plans clean: one at the limit in UTF-16 code units, where a
+// two-byte letter counts one and a letter outside the Basic Multilingual Plane two, and one with
+// surrounding spaces, which the API keeps.
+func TestVirtualTagAcceptsTheDescriptionsTheAPIStores(t *testing.T) {
+	t.Parallel()
+	for name, description := range map[string]string{
+		"ASCII at the limit":                   strings.Repeat("x", 1000),
+		"two-byte letters at the limit":        strings.Repeat("é", 1000),
+		"one astral letter reaching the limit": strings.Repeat("a", 998) + "😀",
+		"surrounding spaces":                   " Owning team ",
+		"one character":                        "x",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			virtualTagFake(api)
+
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{
+					{
+						Config: virtualTagConfig(api, fmt.Sprintf("  description = %q\n", description)),
+						Check:  resource.TestCheckResourceAttr("costfluent_virtual_tag.t", "description", description),
+					},
+				},
+			})
+		})
+	}
 }

@@ -272,6 +272,41 @@ func TestSegmentIsFoundPastTheFirstPage(t *testing.T) {
 	})
 }
 
+func TestSegmentShiftedOutOfAPageDuringRefreshStaysInState(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	segmentFake(api)
+	others := make([]string, 100)
+	for i := range others {
+		others[i] = api.NextID("seg_")
+		api.PutIn("/v1/segments", testWorkspace, others[i], map[string]any{
+			"teamLabel": "Other", "product": "Other", "costCentre": "CC-0", "isShared": false,
+			"createdAt": "2026-10-01T10:00:00Z",
+		})
+	}
+	config := segmentConfig(api, "Checkout", "Payments", "")
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: config},
+			{
+				PreConfig: func() { shiftPastTheCursor(api, "/v1/segments", others[0]) },
+				Config:    config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: func(*terraform.State) error {
+					if n := len(api.IDs("/v1/segments")); n != 100 {
+						return fmt.Errorf("segments = %d, want the 100 left after the delete", n)
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
 func TestSegmentDeletedOutsideTerraformIsRecreated(t *testing.T) {
 	t.Parallel()
 	api := fakeapi.New(t)
@@ -895,4 +930,78 @@ func TestSegmentPercentSplitKeepsItsETagAcrossARefresh(t *testing.T) {
 			},
 		},
 	})
+}
+
+// The schema holds a segment to the API's limits: a value past one is refused at plan with nothing
+// sent, and a value at it plans.
+func TestSegmentRefusesAFieldPastTheAPIsLimitAtPlan(t *testing.T) {
+	t.Parallel()
+	direct := func(teamLabel, product, costCentre string) string {
+		return fmt.Sprintf(`
+resource "costfluent_segment" "s" {
+  workspace_id = %q
+  team_label   = %q
+  product      = %q
+  cost_centre  = %q
+}
+`, testWorkspace, teamLabel, product, costCentre)
+	}
+	shared := func(label string, targets int) string {
+		var ids strings.Builder
+		for i := range targets {
+			fmt.Fprintf(&ids, "{ segment_id = %q }, ", fmt.Sprintf("seg_%022d", i+1))
+		}
+		return fmt.Sprintf(`
+resource "costfluent_segment" "s" {
+  workspace_id = %q
+  is_shared    = true
+  label        = %q
+  split        = { method = "even", targets = [%s] }
+}
+`, testWorkspace, label, ids.String())
+	}
+	// The API counts UTF-16 code units: "é" is two bytes and one unit, "😀" one rune and two units.
+	atLimit, pastLimit := strings.Repeat("a", 200), strings.Repeat("a", 201)
+	astralAtLimit, astralPastLimit := strings.Repeat("a", 198)+"😀", strings.Repeat("a", 199)+"😀"
+	accented := strings.Repeat("é", 101)
+	tooLong := func(attribute string) string {
+		return attribute + `\s+must\s+be\s+at\s+most\s+200\s+characters\s+\(UTF-16\s+code\s+units\),\s+got:\s+201`
+	}
+
+	for name, tc := range map[string]struct{ config, want string }{
+		"team_label past the limit":              {direct(pastLimit, "Checkout", "CC-100"), tooLong("team_label")},
+		"product past the limit":                 {direct("Platform", pastLimit, "CC-100"), tooLong("product")},
+		"cost_centre past the limit":             {direct("Platform", "Checkout", pastLimit), tooLong("cost_centre")},
+		"label past the limit":                   {shared(pastLimit, 2), tooLong("label")},
+		"product past the limit in UTF-16 units": {direct("Platform", astralPastLimit, "CC-100"), tooLong("product")},
+		"label past the limit in UTF-16 units":   {shared(astralPastLimit, 2), tooLong("label")},
+		"split targets past the limit":           {shared("Cluster", 101), `split\.targets list must contain at most 100 elements, got: 101`},
+		"direct segment at the limits":           {direct(atLimit, atLimit, atLimit), ``},
+		"shared segment at the limits":           {shared(atLimit, 100), ``},
+		"accented letters under the limit":       {direct(accented, accented, accented), ``},
+		"astral characters at the limit":         {direct(astralAtLimit, astralAtLimit, astralAtLimit), ``},
+		"astral label at the limit":              {shared(astralAtLimit, 2), ``},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			segmentFake(api)
+
+			step := resource.TestStep{Config: api.ProviderBlock() + tc.config, PlanOnly: true}
+			if tc.want == "" {
+				step.ExpectNonEmptyPlan = true
+			} else {
+				step.ExpectError = regexp.MustCompile(tc.want)
+			}
+			resource.UnitTest(t, resource.TestCase{ProtoV6ProviderFactories: factories, Steps: []resource.TestStep{step}})
+			// A plan that passes validation reads the token's capabilities; one refused stops first.
+			sent := api.Requests("", "")
+			if tc.want == "" {
+				sent = api.Requests(http.MethodPost, "/v1/segments")
+			}
+			if len(sent) != 0 {
+				t.Fatalf("plan sent %s %s, want none", sent[0].Method, sent[0].Path)
+			}
+		})
+	}
 }

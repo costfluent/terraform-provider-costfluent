@@ -72,13 +72,13 @@ resource "costfluent_segment" "cluster" {
 
 ### Optional
 
-- `cost_centre` (String) Cost centre the segment charges to. Required on a direct segment; the API stores none for a shared one.
+- `cost_centre` (String) Cost centre the segment charges to, at most 200 characters. Required on a direct segment; the API stores none for a shared one.
 - `is_shared` (Boolean) Create a shared-cost bucket instead of a named segment. A shared segment names no team, product or cost centre; its cost is spread across direct segments as split says.
-- `label` (String) A shared segment's label. A workspace holds one shared segment per label, compared ignoring case, and one without. Only a shared segment takes one.
-- `product` (String) Product the segment is responsible for. Required on a direct segment; the API stores none for a shared one.
+- `label` (String) A shared segment's label, at most 200 characters. A workspace holds one shared segment per label, compared ignoring case, and one without. Only a shared segment takes one.
+- `product` (String) Product the segment is responsible for, at most 200 characters. Required on a direct segment; the API stores none for a shared one.
 - `split` (Attributes) How a shared segment's pool is spread across direct segments of its workspace. Unset is proportional. Only a shared segment takes one. Allocation is evaluated at query time, so changing the split restates every past month. (see [below for nested schema](#nestedatt--split))
 - `team_id` (String) Team token when the segment is a real team. Set this or team_label, not both.
-- `team_label` (String) Segment name when it is a label rather than a team row.
+- `team_label` (String) Segment name when it is a label rather than a team row, at most 200 characters.
 
 ### Read-Only
 

@@ -21,6 +21,11 @@ func TestAccSavingsView_basic(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 	var created trackedObject
 	var id string
+	const filters = `
+  source                 = "awsCostOptimizationHub"
+  kind                   = "rightsizing"
+  minimum_monthly_saving = "100"
+`
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -28,11 +33,7 @@ func TestAccSavingsView_basic(t *testing.T) {
 		CheckDestroy:             testAccCheckGone("costfluent_savings_view", savingsViewExists),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccSavingsViewConfig(rName, rName, "toReview", `
-  source                 = "awsCostOptimizationHub"
-  kind                   = "rightsizing"
-  minimum_monthly_saving = "100"
-`),
+				Config: testAccSavingsViewConfig(rName, rName, "toReview", filters),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttrSet("costfluent_savings_view.test", "id"),
 					resource.TestCheckResourceAttrPair("costfluent_savings_view.test", "workspace_id", "costfluent_workspace.fixture", "id"),
@@ -47,6 +48,25 @@ func TestAccSavingsView_basic(t *testing.T) {
 				),
 			},
 			testAccImportPlansNothing("costfluent_savings_view.test"),
+			{
+				// The API stores the title trimmed; the padded one stays as configured, and the plan
+				// after the apply is empty.
+				Config: testAccSavingsViewConfig(rName, " "+rName+" padded\n", "toReview", filters),
+				Check: resource.ComposeTestCheckFunc(
+					testAccKeepsID("costfluent_savings_view.test", &id),
+					resource.TestCheckResourceAttr("costfluent_savings_view.test", "title", " "+rName+" padded\n"),
+					func(*terraform.State) error {
+						stored, err := testAccClient().GetSavingsView(context.Background(), created.workspaceID, created.id)
+						if err != nil {
+							return err
+						}
+						if want := rName + " padded"; stored.Title != want {
+							return fmt.Errorf("stored title = %q, want %q", stored.Title, want)
+						}
+						return nil
+					},
+				),
+			},
 			{
 				Config: testAccSavingsViewConfig(rName, rName+" in progress", "inProgress", ""),
 				ConfigPlanChecks: resource.ConfigPlanChecks{

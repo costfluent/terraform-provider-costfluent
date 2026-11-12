@@ -328,7 +328,7 @@ func TestFolderSavedFilterAttachFailureKeepsTheFolder(t *testing.T) {
 	api := fakeapi.New(t)
 	fakeFolders(api)
 	api.Handle("PUT /v1/folders/{id}/saved-filter", func(r fakeapi.Request) fakeapi.Response {
-		return fakeapi.Problem(http.StatusNotFound, "NotFound", "SavedFilter flt_0000000000000000000009 was not found")
+		return fakeapi.Problem(http.StatusNotFound, "not_found", "SavedFilter flt_0000000000000000000009 was not found")
 	})
 
 	resource.UnitTest(t, resource.TestCase{
@@ -366,7 +366,7 @@ func TestFolderSavedFilterUpdateFailureSurfacesTheAPIError(t *testing.T) {
 			{
 				PreConfig: func() {
 					api.FailNext(http.MethodPut, "/v1/folders/"+onlyFolderID(t, api)+"/saved-filter",
-						fakeapi.Problem(http.StatusNotFound, "NotFound", "SavedFilter flt_0000000000000000000009 was not found"))
+						fakeapi.Problem(http.StatusNotFound, "not_found", "SavedFilter flt_0000000000000000000009 was not found"))
 				},
 				Config:      folderWithFilterConfig(api, "flt_0000000000000000000009"),
 				ExpectError: regexp.MustCompile(`Failed to set the folder's saved filter(.|\n)*was not found`),

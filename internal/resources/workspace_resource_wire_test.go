@@ -71,7 +71,7 @@ func fakeWorkspaces(api *fakeapi.Server) {
 				"anomaliesExcludeCommitmentFees": true,
 				"anomalyNotificationThreshold":   "0.00000000",
 				"reportDefaults": map[string]any{
-					"dateInterval": "thisMonth", "dateBin": "day", "includeCredits": false,
+					"dateInterval": "last30Days", "dateBin": "day", "includeCredits": false,
 					"includeRefunds": false, "includeTax": true, "amortize": true,
 					"showForecast": false, "compareToLastPeriod": true,
 				},
@@ -160,16 +160,16 @@ func TestWorkspaceLifecycleSendsTheContractShape(t *testing.T) {
 			{
 				Config: workspaceConfig(api, "Platform EU", `  enable_automatic_syncing = false
   conversion_currency      = "EUR"
-  conversion_method        = "monthEndRate"
+  conversion_method        = "transactionDate"
 `),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("costfluent_workspace.w", "name", "Platform EU"),
 					resource.TestCheckResourceAttr("costfluent_workspace.w", "enable_automatic_syncing", "false"),
-					resource.TestCheckResourceAttr("costfluent_workspace.w", "conversion_method", "monthEndRate"),
+					resource.TestCheckResourceAttr("costfluent_workspace.w", "conversion_method", "transactionDate"),
 					resource.TestCheckResourceAttr("costfluent_workspace.w", "updated_at", "2026-10-02T10:00:00Z"),
 					func(*terraform.State) error {
 						update := api.LastRequest(http.MethodPut, "/v1/workspaces/"+workspaceOnlyID(t, api))
-						want := map[string]any{"name": "Platform EU", "enableAutomaticSyncing": false, "conversionMethod": "monthEndRate"}
+						want := map[string]any{"name": "Platform EU", "enableAutomaticSyncing": false, "conversionMethod": "transactionDate"}
 						if len(update.Body) != len(want) {
 							return fmt.Errorf("update body = %s, want only the changed fields", update.Raw)
 						}
@@ -195,6 +195,55 @@ func TestWorkspaceLifecycleSendsTheContractShape(t *testing.T) {
 			return nil
 		},
 	})
+}
+
+// The API takes only monthlyAverage and transactionDate as a workspace's conversion method, though
+// the contract's FxMethod declares monthEndRate too, so the provider refuses anything else at plan,
+// on create and on update, and sends nothing for it.
+func TestWorkspaceConversionMethodTheAPIRefusesIsRefusedAtPlan(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{"monthEndRate", "MONTHENDRATE", "monthlyAvg"} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			api := fakeapi.New(t)
+			fakeWorkspaces(api)
+			refused := regexp.MustCompile(`Attribute conversion_method value must be one of(.|\n)*got: "` + method + `"`)
+
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{
+					{
+						Config:      workspaceConfig(api, "Platform", fmt.Sprintf("  conversion_method = %q\n", method)),
+						PlanOnly:    true,
+						ExpectError: refused,
+					},
+					{
+						Config: workspaceConfig(api, "Platform", ""),
+						Check: func(*terraform.State) error {
+							if n := len(api.Requests(http.MethodPost, "/v1/workspaces")); n != 1 {
+								return fmt.Errorf("creates = %d, want this step's only: the refused plan sent one", n)
+							}
+							return nil
+						},
+					},
+					{
+						Config:      workspaceConfig(api, "Platform", fmt.Sprintf("  conversion_method = %q\n", method)),
+						ExpectError: refused,
+					},
+					{
+						Config:   workspaceConfig(api, "Platform", ""),
+						PlanOnly: true,
+					},
+				},
+				CheckDestroy: func(*terraform.State) error {
+					if puts := api.Requests(http.MethodPut, ""); len(puts) != 0 {
+						return fmt.Errorf("the refused method sent %d updates, want none (first %s)", len(puts), puts[0].Raw)
+					}
+					return nil
+				},
+			})
+		})
+	}
 }
 
 // A workspace starts with commitment discounts as applied. A configuration that blends them is

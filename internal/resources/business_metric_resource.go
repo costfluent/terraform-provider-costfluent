@@ -2,7 +2,12 @@ package resources
 
 import (
 	"context"
+	"fmt"
+	"regexp"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf16"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
@@ -77,25 +82,31 @@ func (r *BusinessMetricResource) Schema(_ context.Context, _ resource.SchemaRequ
 			},
 			"name": schema.StringAttribute{
 				Required:    true,
-				Description: "Metric name.",
+				Description: "Metric name, not blank.",
 				Validators: []validator.String{
 					stringvalidator.LengthBetween(1, 200),
+					notBlankValidator{},
 				},
 			},
 			"unit": schema.StringAttribute{
 				Required:    true,
-				Description: "What one unit counts, in the singular, such as customer or transaction.",
+				Description: "What one unit counts, in the singular, such as customer or transaction. Not blank.",
 				Validators: []validator.String{
 					stringvalidator.LengthBetween(1, 50),
+					notBlankValidator{},
 				},
 			},
 			"label_columns": schema.ListAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Up to five columns each value is labeled by, such as customer or region. Every stored " +
-					"value is keyed by them, so changing them replaces the metric and its values.",
+				Description: fmt.Sprintf("Up to %d columns each value is labeled by, such as customer or region. Each is "+
+					"named, at most %d characters, does not start like a spreadsheet formula (=, +, - or @, unless it "+
+					"is a number), is not date or amount in any case, and differs from the others ignoring case. "+
+					"Every stored value is keyed by them, so changing them replaces the metric and its values.",
+					businessMetricMaxLabelColumns, businessMetricMaxLabelLength),
 				Validators: []validator.List{
-					listvalidator.SizeAtMost(5),
+					listvalidator.SizeAtMost(businessMetricMaxLabelColumns),
+					labelColumnsValidator{},
 				},
 				PlanModifiers: []planmodifier.List{
 					listplanmodifier.RequiresReplace(),
@@ -232,4 +243,145 @@ func mapBusinessMetricToModel(ctx context.Context, m *costfluent.BusinessMetric,
 	var diags diag.Diagnostics
 	model.LabelColumns, diags = types.ListValueFrom(ctx, types.StringType, m.LabelColumns)
 	return diags
+}
+
+// The API's label column rule, which the contract does not state: a refused column fails only at
+// apply, and a changed column plans a replacement, so without this check the apply destroys the old
+// metric before the API refuses the new one.
+const (
+	businessMetricMaxLabelColumns = 5
+	businessMetricMaxLabelLength  = 100
+)
+
+// businessMetricReservedColumns are the CSV columns every value import carries.
+var businessMetricReservedColumns = []string{"date", "amount"}
+
+// formulaStarts are the characters a spreadsheet may start a formula with, as the API reads them:
+// the ASCII ones and the full-width forms of the four that have one.
+var formulaStarts = []rune{'=', '+', '-', '@', '\t', '\r', '\n', '\uFF1D', '\uFF0B', '\uFF0D', '\uFF20'}
+
+// plainNumber is a signed number as the API's invariant decimal parse reads one: digits with
+// thousands separators anywhere after the first digit and before the point, or a point and digits.
+var plainNumber = regexp.MustCompile(`^[+-](?:([0-9][0-9,]*)(?:\.([0-9]*))?|\.[0-9]+)$`)
+
+// decimalMax is the largest magnitude a .NET decimal holds. A number past it fails the API's parse,
+// so the API reads it as a formula.
+const decimalMax = "79228162514264337593543950335"
+
+// labelColumnsValidator holds each column, trimmed as the API trims it, to the API's rule.
+type labelColumnsValidator struct{}
+
+func (labelColumnsValidator) Description(_ context.Context) string {
+	return fmt.Sprintf("each column named, at most %d characters, not starting like a formula, not %s, "+
+		"and different from the others ignoring case",
+		businessMetricMaxLabelLength, strings.Join(businessMetricReservedColumns, " or "))
+}
+
+func (v labelColumnsValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (labelColumnsValidator) ValidateList(_ context.Context, req validator.ListRequest, resp *validator.ListResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	seen := map[string]string{}
+	for i, element := range req.ConfigValue.Elements() {
+		at := req.Path.AtListIndex(i)
+		column, ok := element.(types.String)
+		if !ok || column.IsUnknown() {
+			continue
+		}
+		if column.IsNull() {
+			resp.Diagnostics.AddAttributeError(at, "Invalid label column", fmt.Sprintf("%s is null.", at))
+			continue
+		}
+		value := column.ValueString()
+		if problem := labelColumnProblem(strings.TrimSpace(value)); problem != "" {
+			resp.Diagnostics.AddAttributeError(at, "Invalid label column", fmt.Sprintf("%s %q %s.", at, value, problem))
+			continue
+		}
+		key := ignoringCase(strings.TrimSpace(value))
+		if first, repeated := seen[key]; repeated {
+			resp.Diagnostics.AddAttributeError(at, "Invalid label column",
+				fmt.Sprintf("%s %q repeats label column %q, ignoring case.", at, value, first))
+			continue
+		}
+		seen[key] = value
+	}
+}
+
+func labelColumnProblem(column string) string {
+	switch {
+	case column == "":
+		return "is blank"
+	case len(utf16.Encode([]rune(column))) > businessMetricMaxLabelLength:
+		return fmt.Sprintf("is longer than %d characters", businessMetricMaxLabelLength)
+	case startsAsFormula(column):
+		return "starts like a spreadsheet formula and is not a number"
+	}
+	for _, reserved := range businessMetricReservedColumns {
+		if ignoringCase(column) == ignoringCase(reserved) {
+			return "is reserved: every value import carries a date and an amount column"
+		}
+	}
+	return ""
+}
+
+// ignoringCase upper-cases each character as the API's ordinal ignore-case comparison does, which
+// leaves the dotless i and the long s alone: to the API "ı" and "i" are different columns.
+func ignoringCase(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\u0131' || r == '\u017F' {
+			return r
+		}
+		return unicode.ToUpper(r)
+	}, value)
+}
+
+func startsAsFormula(value string) bool {
+	for _, start := range formulaStarts {
+		if strings.HasPrefix(value, string(start)) {
+			return !parsesAsDecimal(value)
+		}
+	}
+	return false
+}
+
+// parsesAsDecimal reports whether the API's decimal parse accepts value. The parse rounds the fraction
+// half to even and decimalMax is odd, so decimalMax with any fraction from one half up overflows.
+func parsesAsDecimal(value string) bool {
+	match := plainNumber.FindStringSubmatch(value)
+	if match == nil {
+		return false
+	}
+	integer := strings.TrimLeft(strings.ReplaceAll(match[1], ",", ""), "0")
+	switch {
+	case len(integer) != len(decimalMax):
+		return len(integer) < len(decimalMax)
+	case integer != decimalMax:
+		return integer < decimalMax
+	default:
+		return match[2] == "" || match[2][0] < '5'
+	}
+}
+
+// notBlankValidator refuses a value the API trims to nothing.
+type notBlankValidator struct{}
+
+func (notBlankValidator) Description(_ context.Context) string {
+	return "must not be blank"
+}
+
+func (v notBlankValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (notBlankValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if strings.TrimSpace(req.ConfigValue.ValueString()) == "" {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid value", fmt.Sprintf("%s is blank.", req.Path))
+	}
 }

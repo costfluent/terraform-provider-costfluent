@@ -59,7 +59,7 @@ func TestAccSavingsItems_readTheSeededFindings(t *testing.T) {
 	rightsize := map[string]string{
 		"source":                   "awsCostOptimizationHub",
 		"kind":                     "rightsizing",
-		"title":                    "Rightsize Ec2Instance i-0a7c3e91f42b6d805 (m5.large to t3.medium)",
+		"title":                    "Rightsize EC2 instance i-0a7c3e91f42b6d805 (m5.large to t3.medium)",
 		"estimated_monthly_saving": "48.94000000",
 		"currency":                 "EUR",
 	}

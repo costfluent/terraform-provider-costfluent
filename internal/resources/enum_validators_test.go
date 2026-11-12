@@ -32,6 +32,7 @@ func TestEnumValidatorsMatchTheContract(t *testing.T) {
 			omitted: map[string]string{"previousQuarter": "the API refuses it until a release that reads it is on prod"}},
 		{resource: NewCostReportResource(), path: []string{"settings", "measure"}, schema: "CostMeasure"},
 		{resource: NewCostReportResource(), path: []string{"settings", "unit_cost_calculation"}, schema: "UnitCostCalculation"},
+		{resource: NewCostReportResource(), path: []string{"settings", "comparison_mode"}, schema: "ComparisonMode"},
 		{resource: NewSegmentResource(), path: []string{"split", "method"}, schema: "SegmentSplitMethod"},
 		{resource: NewDashboardWidgetResource(), path: []string{"type"}, schema: "WidgetType"},
 		{resource: NewDashboardWidgetResource(), path: []string{"display"}, schema: "WidgetDisplay"},

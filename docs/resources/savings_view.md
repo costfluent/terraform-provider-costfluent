@@ -43,7 +43,7 @@ resource "costfluent_savings_view" "aws_in_progress" {
 ### Optional
 
 - `cloud_account_id` (String) Only findings the provider of this connection generated. A view keeps a connection removed since, and then lists no finding. Every connection when omitted.
-- `kind` (String) Only findings of this kind, such as rightsizing, idle, generational, storage, commitmentPurchase, extendedSupport or other. Every kind when omitted.
+- `kind` (String) Only findings of this kind, such as rightsizing, idle, generational, storage, commitmentPurchase, extendedSupport, pricingTier or other. Every kind when omitted.
 - `minimum_monthly_saving` (String) Only findings estimated to save at least this much each month, in each finding's own currency, as a decimal string such as "100". The configured spelling is kept while it is the amount the API stores.
 - `source` (String) Only findings from this source, such as operator, billingAnalysis or a provider's engine (awsCostOptimizationHub, azureAdvisor, gcpRecommender). Every source when omitted.
 - `workspace_id` (String) Workspace ID. When omitted, the provider's default workspace at creation is recorded and kept, so a later change to the provider's default does not move it.

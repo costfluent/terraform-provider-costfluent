@@ -7,6 +7,7 @@ import (
 	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -114,8 +115,14 @@ func (r *WorkspaceResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Optional: true,
 				Computed: true,
 				Default:  stringdefault.StaticString("monthlyAverage"),
-				Description: "Exchange rate dates: monthlyAverage (the mean of the month's daily rates), " +
-					"monthEndRate (the month's last rate) or transactionDate (each charge's own day).",
+				Description: "Exchange rate dates: monthlyAverage (the mean of the month's daily rates) or " +
+					"transactionDate (each charge's own day).",
+				// The contract's FxMethod also declares monthEndRate, which the API refuses on a
+				// write because only an operator-set policy picks it; without this the refusal
+				// comes at apply instead of plan.
+				Validators: []validator.String{
+					stringvalidator.OneOfCaseInsensitive("monthlyAverage", "transactionDate"),
+				},
 			},
 			"enable_automatic_syncing": schema.BoolAttribute{
 				Optional: true,

@@ -97,7 +97,7 @@ func (d *SavingsItemsDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 			},
 			"kind": schema.StringAttribute{
 				Optional:    true,
-				Description: "Only findings of this kind, such as rightsizing, idle, generational, storage, commitmentPurchase, extendedSupport or other.",
+				Description: "Only findings of this kind, such as rightsizing, idle, generational, storage, commitmentPurchase, extendedSupport, pricingTier or other.",
 			},
 			"cloud_account_id": schema.StringAttribute{
 				Optional:    true,

@@ -1,12 +1,23 @@
 package acceptance
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 
+	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
+
+// workspaceExists reads a workspace by ID; it is its own workspace, so the read takes no other.
+var workspaceExists = existsByGet(func(c *costfluent.Client, ctx context.Context, _, id string) (*costfluent.Workspace, error) {
+	return c.GetWorkspace(ctx, id)
+})
 
 func TestAccWorkspace_basic(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
@@ -14,6 +25,7 @@ func TestAccWorkspace_basic(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_workspace", workspaceExists),
 		Steps: []resource.TestStep{
 			// Create
 			{
@@ -44,8 +56,9 @@ func TestAccWorkspace_basic(t *testing.T) {
 					// Its calendar runs in UTC unless a zone is configured.
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "time_zone", "UTC"),
 
-					// New reports start on the product's defaults: this month by day, refunds out, compared.
-					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.date_interval", "thisMonth"),
+					// New reports start on the product's defaults: the last 30 days by day, refunds out, compared.
+					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.date_interval", "last30Days"),
+					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.date_bin", "day"),
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.include_refunds", "false"),
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.compare_to_last_period", "true"),
 
@@ -153,4 +166,83 @@ resource "costfluent_workspace" "test" {
   name = %q
 %s}
 `, name+"-updated", attrs)
+}
+
+// TestAccWorkspace_basic applies both conversion methods the provider accepts, so it fails when the
+// API stops taking one. This holds the other side: the API refuses monthEndRate, which the
+// contract's FxMethod declares but only an operator-set policy picks, and the provider refuses it
+// at plan instead of passing it to that refusal at apply.
+func TestAccWorkspace_conversionMethods(t *testing.T) {
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckGone("costfluent_workspace", workspaceExists),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccWorkspaceFixture(rName),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_workspace.fixture", "enable_currency_conversion", "true"),
+					func(s *terraform.State) error {
+						id := s.RootModule().Resources["costfluent_workspace.fixture"].Primary.ID
+						c := testAccClient()
+						method := "monthEndRate"
+						_, err := c.UpdateWorkspace(context.Background(), id,
+							&costfluent.UpdateWorkspaceInput{ConversionMethod: &method})
+						if err == nil {
+							return fmt.Errorf("the API took conversionMethod %q, which the provider refuses at plan", method)
+						}
+						if !costfluent.IsBadRequest(err) || !refusalNamesField(err, "ConversionMethod") {
+							return fmt.Errorf("conversionMethod %q answered %w, want a 400 naming ConversionMethod", method, err)
+						}
+						ws, err := c.GetWorkspace(context.Background(), id)
+						if err != nil {
+							return err
+						}
+						if ws.ConversionMethod != "monthlyAverage" {
+							return fmt.Errorf("conversion method after the refused update = %q, want monthlyAverage", ws.ConversionMethod)
+						}
+						return nil
+					},
+				),
+			},
+			{
+				Config:      testAccWorkspaceFixtureWith(rName, `  conversion_method = "monthEndRate"`),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`Attribute conversion_method value must be one of`),
+			},
+			// The post-test destroy plans the last step's configuration, which the validator would
+			// refuse; ending on the valid one also holds that the refused update left no drift.
+			{
+				Config:   testAccWorkspaceFixture(rName),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// refusalNamesField reports whether err is an API problem with a field error on field.
+func refusalNamesField(err error, field string) bool {
+	var apiErr *costfluent.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	for _, fe := range apiErr.Errors {
+		if strings.EqualFold(fe.Name, field) {
+			return true
+		}
+	}
+	return false
+}
+
+// testAccWorkspaceFixtureWith is testAccWorkspaceFixture with attrs added to the workspace.
+func testAccWorkspaceFixtureWith(name, attrs string) string {
+	return fmt.Sprintf(`
+resource "costfluent_workspace" "fixture" {
+  name     = %q
+  currency = "EUR"
+%s
+}
+`, name+"-ws", attrs)
 }

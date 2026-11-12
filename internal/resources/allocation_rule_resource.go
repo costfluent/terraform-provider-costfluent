@@ -2,11 +2,13 @@ package resources
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/apidiag"
 	"github.com/costfluent/terraform-provider-costfluent/internal/costfluent"
 	"github.com/costfluent/terraform-provider-costfluent/internal/validators"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -51,6 +53,12 @@ type AllocationRuleResourceModel struct {
 	UpdatedAt   types.String `tfsdk:"updated_at"`
 }
 
+// The API's limits on a rule's name and priority. A priority may be as far below zero as above it.
+const (
+	allocationRuleMaxNameLength = 200
+	allocationRuleMaxPriority   = 1_000_000
+)
+
 func NewAllocationRuleResource() resource.Resource {
 	return &AllocationRuleResource{managed{name: "allocation_rule", needs: Needs{
 		Create:      []costfluent.Capability{costfluent.CapabilityManageCostAllocation},
@@ -85,15 +93,22 @@ func (r *AllocationRuleResource) Schema(_ context.Context, _ resource.SchemaRequ
 			},
 			"name": schema.StringAttribute{
 				Required:    true,
-				Description: "Rule name. Documentation only; it moves no cost.",
+				Description: "Rule name, 1 to 200 characters, not blank. Documentation only; it moves no cost.",
+				Validators: []validator.String{
+					validators.UTF16LengthBetween(1, allocationRuleMaxNameLength),
+					notBlankValidator{},
+				},
 			},
 			"priority": schema.Int64Attribute{
 				Optional: true,
 				Computed: true,
 				Default:  int64default.StaticInt64(100),
-				Description: "Evaluation order; lower wins. Ties break by creation time, so the " +
-					"order is total and stable. Leave gaps: inserting a rule ahead of another then " +
-					"needs no renumbering.",
+				Description: "Evaluation order, from -1000000 to 1000000; lower wins. Ties break by " +
+					"creation time, so the order is total and stable. Leave gaps: inserting a rule ahead " +
+					"of another then needs no renumbering.",
+				Validators: []validator.Int64{
+					int64validator.Between(-allocationRuleMaxPriority, allocationRuleMaxPriority),
+				},
 			},
 			"filter": schema.StringAttribute{
 				Required: true,
@@ -179,7 +194,10 @@ func (r *AllocationRuleResource) Read(ctx context.Context, req resource.ReadRequ
 		return
 	}
 
-	rules, err := r.client.ListAllocationRules(ctx, state.WorkspaceID.ValueString())
+	id := state.ID.ValueString()
+	rule, err := findListed(func() ([]costfluent.AllocationRule, error) {
+		return r.client.ListAllocationRules(ctx, state.WorkspaceID.ValueString())
+	}, func(rule costfluent.AllocationRule) bool { return rule.ID == id })
 	if costfluent.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
@@ -188,21 +206,35 @@ func (r *AllocationRuleResource) Read(ctx context.Context, req resource.ReadRequ
 		apidiag.AddError(&resp.Diagnostics, "Failed to read allocation rule", err)
 		return
 	}
-
-	for i := range rules {
-		if rules[i].ID == state.ID.ValueString() {
-			prior := state
-			resp.Diagnostics.Append(mapAllocationRuleToModel(ctx, r.client, &rules[i], &state)...)
-			if resp.Diagnostics.HasError() {
-				return
-			}
-			resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
-			resp.Diagnostics.Append(keepETagWhileUnchanged(ctx, resp.Private, state == prior)...)
-			return
-		}
+	if rule == nil {
+		resp.State.RemoveResource(ctx)
+		return
 	}
 
-	resp.State.RemoveResource(ctx)
+	prior := state
+	resp.Diagnostics.Append(mapAllocationRuleToModel(ctx, r.client, rule, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+	resp.Diagnostics.Append(keepETagWhileUnchanged(ctx, resp.Private, state == prior)...)
+}
+
+// findListed returns the item of a listing that match picks, or nil when two listings both lack it.
+// The listing is paged, one request per page over a list that can change between them: a delete or
+// reorder ahead of the cursor shifts a later row back onto a page already read, so one miss does not
+// prove the row is gone. A second miss does. A row present on the first listing costs no extra read.
+func findListed[T any](list func() ([]T, error), match func(T) bool) (*T, error) {
+	for range 2 {
+		items, err := list()
+		if err != nil {
+			return nil, err
+		}
+		if i := slices.IndexFunc(items, match); i >= 0 {
+			return &items[i], nil
+		}
+	}
+	return nil, nil
 }
 
 func (r *AllocationRuleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {

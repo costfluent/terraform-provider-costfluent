@@ -93,7 +93,7 @@ func (r *SavingsViewResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"kind": schema.StringAttribute{
 				Optional: true,
 				Description: "Only findings of this kind, such as rightsizing, idle, generational, storage, " +
-					"commitmentPurchase, extendedSupport or other. Every kind when omitted.",
+					"commitmentPurchase, extendedSupport, pricingTier or other. Every kind when omitted.",
 			},
 			"cloud_account_id": schema.StringAttribute{
 				Optional: true,
@@ -235,10 +235,11 @@ func plannedDecimal(planned types.String) *costfluent.Decimal {
 }
 
 // mapSavingsViewToModel writes the stored view into the model, keeping the configured spelling of
-// an enum the API answers in its own case and of an amount it answers at eight decimals.
+// a title the API answers trimmed, of an enum it answers in its own case and of an amount it answers
+// at eight decimals.
 func mapSavingsViewToModel(v *costfluent.SavingsView, model *SavingsViewResourceModel) {
 	model.ID = types.StringValue(v.ID)
-	model.Title = types.StringValue(v.Title)
+	model.Title = sameTrimmed(model.Title, v.Title)
 	model.Tab = sameEnum(model.Tab, v.Tab)
 	model.Source = sameOptionalEnum(model.Source, v.Source)
 	model.Kind = sameOptionalEnum(model.Kind, v.Kind)

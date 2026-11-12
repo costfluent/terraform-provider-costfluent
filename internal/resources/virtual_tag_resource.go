@@ -3,7 +3,8 @@ package resources
 import (
 	"context"
 	"encoding/json"
-	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,6 +50,15 @@ type VirtualTagRuleModel struct {
 	Value  types.String `tfsdk:"value"`
 	Filter types.String `tfsdk:"filter"`
 }
+
+// virtualTagDescriptionMaxLength is the API's limit on a virtual tag description.
+const virtualTagDescriptionMaxLength = 1000
+
+// virtualTagDescription matches a description the API stores as written. The API stores one that is
+// empty or all whitespace as none, so letting one through would save the tag and then fail the apply
+// as an inconsistent result. Its whitespace is .NET's: Unicode White_Space, which RE2's \s alone
+// is not.
+var virtualTagDescription = regexp.MustCompile(`[^\s\x{0B}\x{85}\p{Z}]`)
 
 func NewVirtualTagResource() resource.Resource {
 	return &VirtualTagResource{managed{name: "virtual_tag", needs: Needs{
@@ -98,8 +108,14 @@ func (r *VirtualTagResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				},
 			},
 			"description": schema.StringAttribute{
-				Optional:    true,
-				Description: "Virtual tag description.",
+				Optional: true,
+				Description: "Virtual tag description, at most 1000 characters. Leave it unset for none: an empty " +
+					"or whitespace-only value is refused.",
+				Validators: []validator.String{
+					validators.UTF16LengthBetween(1, virtualTagDescriptionMaxLength),
+					stringvalidator.RegexMatches(virtualTagDescription,
+						"must not be blank; leave it unset for no description"),
+				},
 			},
 			"default_value": schema.StringAttribute{
 				Optional:    true,
@@ -332,11 +348,11 @@ func mapVirtualTagToModel(
 }
 
 // keepConfiguredFilter returns the configured filter while it means the stored one, and the stored
-// one otherwise. The API stores and returns every filter as its JSON document, so without this a
-// filter written as CQL, or as JSON in another key order, would plan a change on every refresh and
-// fail apply as an inconsistent result. JSON is compared as JSON; CQL is translated by the API,
-// which owns the grammar, and its JSON compared. With nothing configured, as after an import, the
-// stored value is taken.
+// one otherwise. The API stores and returns every filter as one canonical JSON document, so without
+// this a filter written as CQL, or as JSON in any other spelling the API accepts, would plan a change
+// on every refresh and fail apply as an inconsistent result. JSON is compared as the filter the API
+// reads it as, without a request; CQL is translated by the API, which owns the grammar, and its JSON
+// compared. With nothing configured, as after an import, the stored value is taken.
 func keepConfiguredFilter(
 	ctx context.Context, client *costfluent.Client, configured types.String, stored *string,
 ) (types.String, error) {
@@ -349,7 +365,7 @@ func keepConfiguredFilter(
 
 	text := configured.ValueString()
 	if !isCQL(text) {
-		if sameJSON(text, *stored) {
+		if sameFilter(text, *stored) {
 			return configured, nil
 		}
 		return types.StringValue(*stored), nil
@@ -359,7 +375,7 @@ func keepConfiguredFilter(
 	if err != nil {
 		return types.StringNull(), err
 	}
-	if sameJSON(translated.Filter, *stored) {
+	if sameFilter(translated.Filter, *stored) {
 		return configured, nil
 	}
 	return types.StringValue(*stored), nil
@@ -372,12 +388,75 @@ func isCQL(filter string) bool {
 	return trimmed != "" && trimmed[0] != '[' && trimmed[0] != '{'
 }
 
-// sameJSON reports whether two documents are equal as JSON, so a stored filter that differs from
-// the configuration only in whitespace or key order does not plan a change.
-func sameJSON(a, b string) bool {
-	var x, y any
-	if json.Unmarshal([]byte(a), &x) != nil || json.Unmarshal([]byte(b), &y) != nil {
+// filterClause is one clause of a JSON cost filter, holding only the members the API reads.
+type filterClause struct {
+	Field    string
+	Operator string
+	Values   []string
+	TagKey   *string
+}
+
+// sameFilter reports whether two JSON cost filters mean the same filter to the API. The API matches
+// member names exactly and skips any it does not know, reads field and operator values in any case,
+// one group wrapped in anyOf as the bare array it stores, absent or null values as none, and a null
+// tag key as none, and answers one canonical document; comparing the text or the JSON would count a
+// filter it accepted as a change and fail the create that sent it. Values and tag keys are kept as
+// sent, so they compare exactly and in order. Text that does not read as a filter is compared as
+// text.
+func sameFilter(a, b string) bool {
+	x, okX := readFilter(a)
+	y, okY := readFilter(b)
+	if !okX || !okY {
 		return a == b
 	}
-	return reflect.DeepEqual(x, y)
+	return slices.EqualFunc(x, y, func(g, h []filterClause) bool {
+		return slices.EqualFunc(g, h, func(c, d filterClause) bool {
+			return strings.EqualFold(c.Field, d.Field) &&
+				strings.EqualFold(c.Operator, d.Operator) &&
+				slices.Equal(c.Values, d.Values) &&
+				(c.TagKey == nil) == (d.TagKey == nil) &&
+				(c.TagKey == nil || *c.TagKey == *d.TagKey)
+		})
+	})
+}
+
+func readFilter(text string) ([][]filterClause, bool) {
+	trimmed := strings.TrimSpace(text)
+	var groups [][]map[string]json.RawMessage
+	if strings.HasPrefix(trimmed, "{") {
+		var document map[string]json.RawMessage
+		if json.Unmarshal([]byte(trimmed), &document) != nil ||
+			!readMember(document, "anyOf", &groups) || groups == nil {
+			return nil, false
+		}
+	} else {
+		var group []map[string]json.RawMessage
+		if json.Unmarshal([]byte(trimmed), &group) != nil {
+			return nil, false
+		}
+		groups = [][]map[string]json.RawMessage{group}
+	}
+
+	filter := make([][]filterClause, len(groups))
+	for i, group := range groups {
+		filter[i] = make([]filterClause, len(group))
+		for j, members := range group {
+			clause := &filter[i][j]
+			if !readMember(members, "field", &clause.Field) ||
+				!readMember(members, "operator", &clause.Operator) ||
+				!readMember(members, "values", &clause.Values) ||
+				!readMember(members, "tagKey", &clause.TagKey) {
+				return nil, false
+			}
+		}
+	}
+	return filter, true
+}
+
+// readMember decodes the member named exactly name into target, and leaves target as it is when
+// there is none. Decoding into a struct would also take a member named in another case, which the
+// API skips, and so count a filter it stored without that member as a change.
+func readMember(members map[string]json.RawMessage, name string, target any) bool {
+	raw, ok := members[name]
+	return !ok || json.Unmarshal(raw, target) == nil
 }

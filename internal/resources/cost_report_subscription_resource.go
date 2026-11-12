@@ -129,9 +129,10 @@ func (r *CostReportSubscriptionResource) Schema(_ context.Context, _ resource.Sc
 			"app_ids": schema.ListAttribute{
 				Required:    true,
 				ElementType: types.StringType,
-				Description: "The email, Slack or Teams apps each delivery goes to, at least one.",
+				Description: "The email, Slack or Teams apps each delivery goes to, at least one, each listed once.",
 				Validators: []validator.List{
 					listvalidator.SizeAtLeast(1),
+					listvalidator.UniqueValues(),
 				},
 			},
 			"is_active": schema.BoolAttribute{

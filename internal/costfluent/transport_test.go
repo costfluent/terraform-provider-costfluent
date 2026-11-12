@@ -631,6 +631,107 @@ func TestRetryStillResendsUnconditionalIdempotentRequests(t *testing.T) {
 	}
 }
 
+// scriptedClient is a client whose every attempt script answers, with a backoff short enough not
+// to wait in a test.
+func scriptedClient(script roundTripFunc) *Client {
+	c := NewClient(WithBaseURL("https://api.example.test"), WithAPIKey("key"))
+	rt := c.httpClient.Transport.(*retryTransport)
+	rt.baseDelay = time.Microsecond
+	rt.base = script
+	return c
+}
+
+func notFoundProblem(r *http.Request) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     http.Header{"Content-Type": {"application/problem+json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"title":"Not Found","status":404,"code":"not_found"}`)),
+		Request:    r,
+	}
+}
+
+// The first DELETE removed the member and only its answer was lost: the resend finds nothing, and
+// the caller gets its not-found as the API answered it.
+func TestRetryReportsNotFoundWhenAResentDeleteFindsTheObjectGone(t *testing.T) {
+	for _, f := range retryFailures() {
+		t.Run(f.name, func(t *testing.T) {
+			var calls int
+			c := scriptedClient(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					return f.fail(r)
+				}
+				return notFoundProblem(r), nil
+			})
+
+			err := c.RemoveTeamMember(context.Background(), "team_1", "usr_1")
+			if !IsNotFound(err) {
+				t.Fatalf("err = %v, want the resend's not-found", err)
+			}
+			if calls != 2 {
+				t.Fatalf("sent %d times, want 2", calls)
+			}
+		})
+	}
+}
+
+func TestRetryDoesNotResendADeleteTheAPIAnsweredNotFound(t *testing.T) {
+	var calls int
+	c := scriptedClient(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return notFoundProblem(r), nil
+		}
+		return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody, Request: r}, nil
+	})
+
+	err := c.RemoveTeamMember(context.Background(), "team_1", "usr_1")
+	if !IsNotFound(err) || calls != 1 {
+		t.Fatalf("err = %v after %d requests, want the not-found of the one request", err, calls)
+	}
+}
+
+// A 404 in the problem media type is the API's own answer, whatever its code: resending it gets the
+// same answer, and only the code not_found says the object is missing.
+func TestRetryDoesNotResendAnAPIErrorWhateverItsCode(t *testing.T) {
+	calls := map[string]func(c *Client) error{
+		http.MethodGet: func(c *Client) error {
+			_, err := c.GetWorkspace(context.Background(), "ws_1")
+			return err
+		},
+		http.MethodPut: func(c *Client) error {
+			_, err := c.UpdateWorkspace(context.Background(), "ws_1", &UpdateWorkspaceInput{})
+			return err
+		},
+		http.MethodDelete: func(c *Client) error {
+			return c.DeleteWorkspace(context.Background(), "ws_1")
+		},
+	}
+	for method, call := range calls {
+		t.Run(method, func(t *testing.T) {
+			var sent atomic.Int32
+			c := retryingClient(t, func(w http.ResponseWriter, r *http.Request) {
+				sent.Add(1)
+				if r.Method != method {
+					t.Errorf("method %s, want %s", r.Method, method)
+				}
+				w.Header().Set("Content-Type", "application/problem+json")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = io.WriteString(w, `{"title":"Not Found","status":404,"code":"operation_not_found","retryable":false}`)
+			})
+
+			err := call(c)
+			if StatusCode(err) != http.StatusNotFound || IsNotFound(err) || IsRetryable(err) {
+				t.Fatalf("err = %v: IsNotFound %v, IsRetryable %v, want a final 404 that is neither",
+					err, IsNotFound(err), IsRetryable(err))
+			}
+			if sent.Load() != 1 {
+				t.Fatalf("sent %d times, want 1", sent.Load())
+			}
+		})
+	}
+}
+
 // The rate limiter refuses a request before any endpoint runs it, so a conditional one is resent.
 func TestRetryResendsARateLimitedPreconditionRequest(t *testing.T) {
 	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
