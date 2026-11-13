@@ -19,8 +19,8 @@ import (
 // resourceOperations is every Public API operation each action of a resource sends through the
 // SDK, read-backs included, and last the calls only some configurations send (a CQL filter's
 // translation, a saved filter or settings applied right after a create, a link created disabled),
-// in the order its declared needs name their capabilities. Import is left out: it reads with what
-// Read needs.
+// in the order its declared needs name their capabilities. An import's calls are listed under read:
+// it reads with what Read needs.
 var resourceOperations = map[string]struct {
 	new                                       func() fwresource.Resource
 	create, read, update, delete, conditional []string
@@ -39,7 +39,7 @@ var resourceOperations = map[string]struct {
 		nil},
 	"costfluent_budget": {resources.NewBudgetResource,
 		[]string{"POST /v1/budgets"},
-		[]string{"GET /v1/budgets/{budgetId}"},
+		[]string{"GET /v1/budgets/{budgetId}", "GET /v1/budgets"},
 		[]string{"PUT /v1/budgets/{budgetId}", "GET /v1/budgets/{budgetId}"},
 		[]string{"DELETE /v1/budgets/{budgetId}"},
 		nil},
@@ -58,7 +58,7 @@ var resourceOperations = map[string]struct {
 	"costfluent_cost_report": {resources.NewCostReportResource,
 		[]string{"POST /v1/cost-reports", "GET /v1/cost-reports/{costReportId}"},
 		[]string{"GET /v1/cost-reports/{costReportId}"},
-		[]string{"PUT /v1/cost-reports/{costReportId}", "GET /v1/cost-reports/{costReportId}"},
+		[]string{"PUT /v1/cost-reports/{costReportId}", "GET /v1/cost-reports/{costReportId}", "GET /v1/business-metrics/{metricId}"},
 		[]string{"DELETE /v1/cost-reports/{costReportId}"},
 		[]string{"GET /v1/cost-filters/translate"}},
 	"costfluent_cost_report_subscription": {resources.NewCostReportSubscriptionResource,
@@ -70,7 +70,7 @@ var resourceOperations = map[string]struct {
 	"costfluent_dashboard": {resources.NewDashboardResource,
 		[]string{"POST /v1/dashboards", "GET /v1/dashboards/{dashboardId}"},
 		[]string{"GET /v1/dashboards/{dashboardId}"},
-		[]string{"PUT /v1/dashboards/{dashboardId}", "PUT /v1/dashboards/{dashboardId}/saved-filter"},
+		[]string{"PUT /v1/dashboards/{dashboardId}", "PUT /v1/dashboards/{dashboardId}/saved-filter", "PUT /v1/dashboards/{dashboardId}/default"},
 		[]string{"DELETE /v1/dashboards/{dashboardId}"},
 		[]string{"PUT /v1/dashboards/{dashboardId}/saved-filter"}},
 	"costfluent_dashboard_widget": {resources.NewDashboardWidgetResource,
@@ -191,9 +191,18 @@ func (o declaredOperation) conditionalOrganization() string {
 // carry, from the copy of the Public API contract the embedded SDK carries.
 func contract(t *testing.T) (map[string]declaredOperation, map[string]bool) {
 	t.Helper()
-	raw, err := os.ReadFile("../costfluent/testdata/public.v1.json")
+	operations, grantable, err := readContract()
 	if err != nil {
 		t.Fatal(err)
+	}
+	return operations, grantable
+}
+
+// readContract is contract for TestMain, which has no *testing.T to fail.
+func readContract() (map[string]declaredOperation, map[string]bool, error) {
+	raw, err := os.ReadFile("../costfluent/testdata/public.v1.json")
+	if err != nil {
+		return nil, nil, err
 	}
 	var doc struct {
 		Paths      map[string]map[string]declaredOperation `json:"paths"`
@@ -206,7 +215,7 @@ func contract(t *testing.T) (map[string]declaredOperation, map[string]bool) {
 		} `json:"components"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		t.Fatal(err)
+		return nil, nil, fmt.Errorf("reading the Public API contract: %w", err)
 	}
 	operations := map[string]declaredOperation{}
 	for path, methods := range doc.Paths {
@@ -218,7 +227,7 @@ func contract(t *testing.T) (map[string]declaredOperation, map[string]bool) {
 	for _, id := range doc.Components.Schemas.ApiTokenCapability.Values {
 		grantable[id] = true
 	}
-	return operations, grantable
+	return operations, grantable, nil
 }
 
 // capabilitySentence is the sentence a resource's description names its token with: an

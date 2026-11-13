@@ -16,8 +16,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// Each attribute validated from the SDK's constants accepts every value its schema in the Public
-// API contract declares, less the ones the provider leaves out on purpose, and nothing else.
+// Each attribute validated against a list of values, whether built from the SDK's constants or
+// written out in the provider, accepts every value its schema in the Public API contract declares,
+// less the ones the provider leaves out on purpose, and nothing else.
 func TestEnumValidatorsMatchTheContract(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -38,6 +39,11 @@ func TestEnumValidatorsMatchTheContract(t *testing.T) {
 		{resource: NewDashboardWidgetResource(), path: []string{"display"}, schema: "WidgetDisplay"},
 		{resource: NewBudgetResource(), path: []string{"alerts", "basis"}, schema: "BudgetAlertBasis"},
 		{resource: NewBudgetResource(), path: []string{"measure"}, schema: "BudgetMeasureValue"},
+		{resource: NewBudgetResource(), path: []string{"interval_unit"}, schema: "BudgetIntervalUnitValue"},
+		{resource: NewTeamMemberResource(), path: []string{"role"}, schema: "TeamRole"},
+		{resource: NewTeamWorkspaceAccessResource(), path: []string{"access_level"}, schema: "WorkspaceAccessLevel"},
+		{resource: NewCostReportSubscriptionResource(), path: []string{"schedule_type"}, schema: "ScheduleType"},
+		{resource: NewAppResource(), path: []string{"key"}, schema: "AppKey"},
 	} {
 		attribute := stringAttributeAt(t, tc.resource, tc.path)
 		declared := contractEnum(t, tc.schema)

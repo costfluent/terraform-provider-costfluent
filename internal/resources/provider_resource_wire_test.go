@@ -68,7 +68,13 @@ resource "costfluent_provider" "aws" {
 }
 
 var factories = map[string]func() (tfprotov6.ProviderServer, error){
-	"costfluent": providerserver.NewProtocol6WithError(provider.New("test")()),
+	"costfluent": func() (tfprotov6.ProviderServer, error) {
+		server, err := providerserver.NewProtocol6WithError(provider.New("test")())()
+		if err != nil {
+			return nil, err
+		}
+		return taggingServer{server}, nil
+	},
 }
 
 // The key a configuration writes is the key the API answers, so create, refresh and the next plan
