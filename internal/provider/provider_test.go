@@ -215,6 +215,35 @@ func TestConfigureReportsARateLimitedToken(t *testing.T) {
 	})
 }
 
+// Short rate limits, as a token contended by Terraform's parallel workers meets them, are waited out
+// for as long as the waits stay within a minute in all, however many there are.
+func TestConfigureOutlastsShortRateLimits(t *testing.T) {
+	clearProviderEnv(t)
+	api := fakeapi.New(t)
+	for range 4 {
+		limited := fakeapi.Problem(http.StatusTooManyRequests, "rate_limited", "Too many requests")
+		limited.Header = http.Header{"Retry-After": []string{"0"}}
+		api.FailNext(http.MethodGet, "/v1/me", limited)
+	}
+	fakeWorkspaces(api)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: api.ProviderBlock() + workspacesDataSource,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("data.costfluent_workspaces.all", "workspaces.0.name", "Production"),
+				func(*terraform.State) error {
+					if got := len(api.Requests(http.MethodGet, "/v1/me")); got < 5 {
+						return fmt.Errorf("token read %d times, want the four 429s and then the answer", got)
+					}
+					return nil
+				},
+			),
+		}},
+	})
+}
+
 func TestConfigureReportsAnAPIThatDoesNotAnswer(t *testing.T) {
 	clearProviderEnv(t)
 	gone := httptest.NewServer(http.NotFoundHandler())

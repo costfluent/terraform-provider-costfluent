@@ -16,8 +16,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// Each attribute validated from the SDK's constants accepts every value its schema in the Public
-// API contract declares, and nothing else.
+// Each attribute validated against a list of values, whether built from the SDK's constants or
+// written out in the provider, accepts every value its schema in the Public API contract declares,
+// and nothing else.
 func TestEnumValidatorsMatchTheContract(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -26,6 +27,7 @@ func TestEnumValidatorsMatchTheContract(t *testing.T) {
 		schema     string
 	}{
 		{dataSource: NewCostDataDataSource(), attribute: "measure", schema: "CostMeasure"},
+		{dataSource: NewSavingsItemsDataSource(), attribute: "sort", schema: "SavingsQueueSort"},
 	} {
 		attribute := stringAttribute(t, tc.dataSource, tc.attribute)
 		declared := contractEnum(t, tc.schema)
