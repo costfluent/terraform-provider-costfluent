@@ -687,6 +687,111 @@ func TestWorkspaceReportDefaultsSendOnlyWhatTheConfigurationNames(t *testing.T) 
 	})
 }
 
+// Each report default flag travels under its own field both ways. The steps turn the four flags
+// away from the API's defaults one at a time, so every pair of them holds different values at some
+// step and a flag sent as, or read from, another flag's field shows in the request or in state.
+func TestWorkspaceReportDefaultsSendAndReadEachFlagByItsOwnField(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	fakeWorkspaces(api)
+
+	flagsConfig := func(flags string) string {
+		return workspaceConfig(api, "Platform", "  report_defaults = {\n"+flags+"  }\n")
+	}
+	sentDefaults := func(want map[string]any) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			update := api.LastRequest(http.MethodPut, "/v1/workspaces/"+workspaceOnlyID(t, api))
+			sent, ok := update.Body["reportDefaults"].(map[string]any)
+			if !ok || len(sent) != len(want) {
+				return fmt.Errorf("update body = %s, want reportDefaults %v", update.Raw, want)
+			}
+			for field, value := range want {
+				if sent[field] != value {
+					return fmt.Errorf("update body = %s, want reportDefaults %v", update.Raw, want)
+				}
+			}
+			return nil
+		}
+	}
+	stateFlags := func(credits, refunds, forecast, compare string) resource.TestCheckFunc {
+		return resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("costfluent_workspace.w", "report_defaults.include_credits", credits),
+			resource.TestCheckResourceAttr("costfluent_workspace.w", "report_defaults.include_refunds", refunds),
+			resource.TestCheckResourceAttr("costfluent_workspace.w", "report_defaults.show_forecast", forecast),
+			resource.TestCheckResourceAttr("costfluent_workspace.w", "report_defaults.compare_to_last_period", compare),
+		)
+	}
+	const (
+		credits  = "    include_credits = true\n"
+		refunds  = "    include_refunds = true\n"
+		forecast = "    show_forecast = true\n"
+		compare  = "    compare_to_last_period = false\n"
+	)
+	allFlags := flagsConfig(credits + refunds + forecast + compare)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: flagsConfig(credits),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sentDefaults(map[string]any{"includeCredits": true}),
+					stateFlags("true", "false", "false", "true"),
+				),
+			},
+			{
+				Config: flagsConfig(credits + refunds),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sentDefaults(map[string]any{"includeCredits": true, "includeRefunds": true}),
+					stateFlags("true", "true", "false", "true"),
+				),
+			},
+			{
+				Config: flagsConfig(credits + refunds + forecast),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sentDefaults(map[string]any{"includeCredits": true, "includeRefunds": true, "showForecast": true}),
+					stateFlags("true", "true", "true", "true"),
+				),
+			},
+			{
+				Config: allFlags,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sentDefaults(map[string]any{
+						"includeCredits": true, "includeRefunds": true, "showForecast": true, "compareToLastPeriod": false,
+					}),
+					stateFlags("true", "true", "true", "false"),
+				),
+			},
+			{
+				PreConfig: func() {
+					api.Update("/v1/workspaces", workspaceOnlyID(t, api), func(obj map[string]any) {
+						obj["reportDefaults"].(map[string]any)["showForecast"] = false
+					})
+				},
+				Config:             allFlags,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPostRefresh: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("costfluent_workspace.w", plancheck.ResourceActionUpdate),
+					},
+				},
+			},
+			// The apply restores the configured forecast. Without it the post-test destroy, which does
+			// not refresh, would send the version from before the edit and be refused with 412.
+			{
+				Config: allFlags,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					sentDefaults(map[string]any{
+						"includeCredits": true, "includeRefunds": true, "showForecast": true, "compareToLastPeriod": false,
+					}),
+					stateFlags("true", "true", "true", "false"),
+				),
+			},
+		},
+	})
+}
+
 // The anomaly settings start on the API's defaults, a configuration that names one is applied as
 // the create's settings update, and a change later sends only what changed. A threshold the API
 // answers with eight decimals keeps the configuration's spelling, so the plan stays empty.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/costfluent/terraform-provider-costfluent/internal/fakeapi"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
@@ -226,6 +227,67 @@ func TestCostReportSubscriptionLifecycle(t *testing.T) {
 				return fmt.Errorf("subscriptions left after destroy: %v", ids)
 			}
 			return nil
+		},
+	})
+}
+
+// A notification deleted outside Terraform, in the console or with its report, reads as 404, leaves
+// the state, and is planned again.
+func TestCostReportSubscriptionDeletedOutsideTerraformIsRecreated(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	subscriptionFake(api)
+	const path = "/v1/cost-report-subscriptions"
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: subscriptionConfig(api, "")},
+			{
+				PreConfig: func() { api.Remove(path, subscriptionOnlyID(t, api)) },
+				Config:    subscriptionConfig(api, ""),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("costfluent_cost_report_subscription.s", plancheck.ResourceActionCreate),
+					},
+				},
+				Check: func(*terraform.State) error {
+					if creates := api.Requests(http.MethodPost, path); len(creates) != 2 {
+						return fmt.Errorf("creates = %d, want the notification created again", len(creates))
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+// A destroy that races a deletion in the console reads the notification, then its DELETE answers 404:
+// the notification is gone either way, so the destroy succeeds.
+func TestCostReportSubscriptionDeleteOfAnAlreadyGoneNotificationSucceeds(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	subscriptionFake(api)
+	const path = "/v1/cost-report-subscriptions"
+	var item string
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: subscriptionConfig(api, "")},
+			{
+				PreConfig: func() {
+					item = path + "/" + subscriptionOnlyID(t, api)
+					api.FailNext(http.MethodDelete, item, fakeapi.NotFound())
+				},
+				Config: api.ProviderBlock(),
+				Check: func(*terraform.State) error {
+					if deletes := api.Requests(http.MethodDelete, item); len(deletes) != 1 {
+						return fmt.Errorf("deletes = %d, want the one answered 404", len(deletes))
+					}
+					return nil
+				},
+			},
 		},
 	})
 }

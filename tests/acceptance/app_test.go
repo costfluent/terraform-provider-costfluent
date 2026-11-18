@@ -62,7 +62,7 @@ func TestAccApp_webhookSecretRemoved(t *testing.T) {
 		CheckDestroy:             testAccCheckGone("costfluent_app", appExists),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccWebhookAppConfig(rName, `, secret = "whsec-acc"`),
+				Config: testAccWebhookAppConfig(rName, `, secret = "whsec-acc-webhook-signing-secret-chosen"`),
 				Check:  resource.TestCheckResourceAttr("costfluent_app.test", "key", "webhook"),
 			},
 			{

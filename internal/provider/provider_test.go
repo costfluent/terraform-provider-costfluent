@@ -3,6 +3,7 @@ package provider_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -389,6 +390,22 @@ func TestConfigureRefusesATimeoutBelowOneSecond(t *testing.T) {
 	})
 }
 
+var wantResources = []string{
+	"costfluent_allocation_rule", "costfluent_app", "costfluent_budget",
+	"costfluent_business_metric", "costfluent_cost_alert",
+	"costfluent_cost_report", "costfluent_cost_report_subscription", "costfluent_dashboard",
+	"costfluent_dashboard_widget", "costfluent_folder", "costfluent_gcp_service_account", "costfluent_provider",
+	"costfluent_saved_filter", "costfluent_savings_view", "costfluent_segment", "costfluent_tag_policy", "costfluent_team", "costfluent_team_member",
+	"costfluent_team_workspace_access",
+	"costfluent_virtual_tag", "costfluent_workspace", "costfluent_workspace_provider",
+}
+
+var wantDataSources = []string{
+	"costfluent_anomalies", "costfluent_aws_provider_info", "costfluent_commitments", "costfluent_cost_data",
+	"costfluent_cost_summary", "costfluent_entitlement", "costfluent_provider", "costfluent_providers",
+	"costfluent_savings_items", "costfluent_user", "costfluent_workspace", "costfluent_workspaces",
+}
+
 func TestProviderRegistersEveryResourceAndDataSource(t *testing.T) {
 	ctx := context.Background()
 	p := provider.New("1.2.3")()
@@ -406,15 +423,6 @@ func TestProviderRegistersEveryResourceAndDataSource(t *testing.T) {
 		resources = append(resources, resp.TypeName)
 	}
 	slices.Sort(resources)
-	wantResources := []string{
-		"costfluent_allocation_rule", "costfluent_app", "costfluent_budget",
-		"costfluent_business_metric", "costfluent_cost_alert",
-		"costfluent_cost_report", "costfluent_cost_report_subscription", "costfluent_dashboard",
-		"costfluent_dashboard_widget", "costfluent_folder", "costfluent_gcp_service_account", "costfluent_provider",
-		"costfluent_saved_filter", "costfluent_savings_view", "costfluent_segment", "costfluent_tag_policy", "costfluent_team", "costfluent_team_member",
-		"costfluent_team_workspace_access",
-		"costfluent_virtual_tag", "costfluent_workspace", "costfluent_workspace_provider",
-	}
 	if !slices.Equal(resources, wantResources) {
 		t.Fatalf("resources = %v, want %v", resources, wantResources)
 	}
@@ -426,11 +434,6 @@ func TestProviderRegistersEveryResourceAndDataSource(t *testing.T) {
 		dataSources = append(dataSources, resp.TypeName)
 	}
 	slices.Sort(dataSources)
-	wantDataSources := []string{
-		"costfluent_anomalies", "costfluent_aws_provider_info", "costfluent_commitments", "costfluent_cost_data",
-		"costfluent_cost_summary", "costfluent_entitlement", "costfluent_provider", "costfluent_providers",
-		"costfluent_savings_items", "costfluent_user", "costfluent_workspace", "costfluent_workspaces",
-	}
 	if !slices.Equal(dataSources, wantDataSources) {
 		t.Fatalf("data sources = %v, want %v", dataSources, wantDataSources)
 	}
@@ -451,4 +454,141 @@ func TestProviderSchemaMarksTheAPIKeySensitive(t *testing.T) {
 			t.Errorf("%s missing or not optional", name)
 		}
 	}
+}
+
+// wantSensitive is declared by hand: every attribute that must be redacted from plan and apply
+// output, compared against the protocol schema Terraform receives. Data sources carry a data.
+// prefix because costfluent_provider names both a resource and a data source.
+var wantSensitive = []string{
+	"costfluent_app.config",
+	"costfluent_app.signing_secret",
+	"costfluent_provider.credentials",
+	"data.costfluent_aws_provider_info.external_id",
+	"provider.api_key",
+}
+
+func TestSchemasMarkExactlyTheSecretAttributesSensitive(t *testing.T) {
+	server, err := factories["costfluent"]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := server.GetProviderSchema(context.Background(), &tfprotov6.GetProviderSchemaRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range resp.Diagnostics {
+		t.Errorf("diagnostic: %s: %s", d.Summary, d.Detail)
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+	if resp.Provider == nil {
+		t.Fatal("the response has no provider schema")
+	}
+	unwalked := map[string][]string{
+		"ephemeral resource": slices.Sorted(maps.Keys(resp.EphemeralResourceSchemas)),
+		"list resource":      slices.Sorted(maps.Keys(resp.ListResourceSchemas)),
+		"action":             slices.Sorted(maps.Keys(resp.ActionSchemas)),
+	}
+	for kind, names := range unwalked {
+		if len(names) > 0 {
+			t.Errorf("%s schemas %v are served but not walked: extend the walk to them so their sensitive attributes are checked", kind, names)
+		}
+	}
+
+	// An empty or partial response would collect no sensitive paths from what it left out and so
+	// pass the set comparison below; this holds the walk to every registered type.
+	if got := slices.Sorted(maps.Keys(resp.ResourceSchemas)); !slices.Equal(got, wantResources) {
+		t.Fatalf("resource schemas = %v, want %v", got, wantResources)
+	}
+	if got := slices.Sorted(maps.Keys(resp.DataSourceSchemas)); !slices.Equal(got, wantDataSources) {
+		t.Fatalf("data source schemas = %v, want %v", got, wantDataSources)
+	}
+
+	got := sensitivePaths("provider", resp.Provider.Block)
+	for name, s := range resp.ResourceSchemas {
+		got = append(got, sensitivePaths(name, s.Block)...)
+	}
+	for name, s := range resp.DataSourceSchemas {
+		got = append(got, sensitivePaths("data."+name, s.Block)...)
+	}
+	slices.Sort(got)
+
+	for _, path := range wantSensitive {
+		if !slices.Contains(got, path) {
+			t.Errorf("%s is not sensitive, so every plan and apply would print it", path)
+		}
+	}
+	for _, path := range got {
+		if !slices.Contains(wantSensitive, path) {
+			t.Errorf("%s is sensitive but not declared here: a new secret goes into both its schema and wantSensitive", path)
+		}
+	}
+}
+
+func TestSensitivePathsWalksNestedAttributesAndBlocks(t *testing.T) {
+	block := &tfprotov6.SchemaBlock{
+		Attributes: []*tfprotov6.SchemaAttribute{
+			{Name: "plain"},
+			{Name: "secret", Sensitive: true},
+			{Name: "settings", NestedType: &tfprotov6.SchemaObject{
+				Attributes: []*tfprotov6.SchemaAttribute{
+					{Name: "region"},
+					{Name: "token", Sensitive: true},
+				},
+			}},
+		},
+		BlockTypes: []*tfprotov6.SchemaNestedBlock{{
+			TypeName: "auth",
+			Block: &tfprotov6.SchemaBlock{
+				Attributes: []*tfprotov6.SchemaAttribute{{Name: "password", Sensitive: true}},
+				BlockTypes: []*tfprotov6.SchemaNestedBlock{{
+					TypeName: "inner",
+					Block: &tfprotov6.SchemaBlock{
+						Attributes: []*tfprotov6.SchemaAttribute{{Name: "key", Sensitive: true}},
+					},
+				}},
+			},
+		}},
+	}
+
+	got := sensitivePaths("costfluent_example", block)
+	slices.Sort(got)
+	want := []string{
+		"costfluent_example.auth.inner.key",
+		"costfluent_example.auth.password",
+		"costfluent_example.secret",
+		"costfluent_example.settings.token",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("sensitive paths = %v, want %v", got, want)
+	}
+	if got := sensitivePaths("costfluent_example", nil); len(got) != 0 {
+		t.Fatalf("sensitive paths of a nil block = %v, want none", got)
+	}
+}
+
+func sensitivePaths(prefix string, block *tfprotov6.SchemaBlock) []string {
+	if block == nil {
+		return nil
+	}
+	paths := sensitiveAttributePaths(prefix, block.Attributes)
+	for _, nested := range block.BlockTypes {
+		paths = append(paths, sensitivePaths(prefix+"."+nested.TypeName, nested.Block)...)
+	}
+	return paths
+}
+
+func sensitiveAttributePaths(prefix string, attributes []*tfprotov6.SchemaAttribute) []string {
+	var paths []string
+	for _, a := range attributes {
+		path := prefix + "." + a.Name
+		if a.Sensitive {
+			paths = append(paths, path)
+		}
+		if a.NestedType != nil {
+			paths = append(paths, sensitiveAttributePaths(path, a.NestedType.Attributes)...)
+		}
+	}
+	return paths
 }
