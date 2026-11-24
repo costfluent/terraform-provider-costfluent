@@ -71,7 +71,7 @@ func fakeWorkspaces(api *fakeapi.Server) {
 				"anomaliesExcludeCommitmentFees": true,
 				"anomalyNotificationThreshold":   "0.00000000",
 				"reportDefaults": map[string]any{
-					"dateInterval": "last30Days", "dateBin": "day", "includeCredits": false,
+					"dateInterval": "thisMonth", "dateBin": "day", "includeCredits": false,
 					"includeRefunds": false, "includeTax": true, "amortize": true,
 					"showForecast": false, "compareToLastPeriod": true,
 				},

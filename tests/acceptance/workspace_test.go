@@ -56,8 +56,8 @@ func TestAccWorkspace_basic(t *testing.T) {
 					// Its calendar runs in UTC unless a zone is configured.
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "time_zone", "UTC"),
 
-					// New reports start on the product's defaults: the last 30 days by day, refunds out, compared.
-					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.date_interval", "last30Days"),
+					// New reports start on the product's defaults: this month by day, refunds out, compared.
+					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.date_interval", "thisMonth"),
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.date_bin", "day"),
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.include_refunds", "false"),
 					resource.TestCheckResourceAttr("costfluent_workspace.test", "report_defaults.compare_to_last_period", "true"),

@@ -32,7 +32,7 @@ func stubProviderAPI(t *testing.T, wireKey string) *httptest.Server {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"id":"prv_1","type":"cloud","key":%q,"displayName":"AWS prod","status":"active",
-			"syncFrequencyMinutes":1440,"createdAt":"2026-10-04T00:00:00Z"}`, wireKey)
+			"syncFrequencyMinutes":1440,"enableAutomaticSyncing":true,"createdAt":"2026-10-04T00:00:00Z"}`, wireKey)
 	})
 	mux.HandleFunc("DELETE /v1/providers/prv_1", func(w http.ResponseWriter, _ *http.Request) {
 		created = false

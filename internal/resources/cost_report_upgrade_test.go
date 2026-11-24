@@ -13,6 +13,11 @@ import (
 
 // v021CostReportState is a cost report as provider v0.2.1 stored it: group_by a single string.
 func v021CostReportState(groupBy any) []byte {
+	return v021CostReportStateWith(groupBy, nil)
+}
+
+// v021CostReportStateWith is v021CostReportState with the given attributes replaced.
+func v021CostReportStateWith(groupBy any, overrides map[string]any) []byte {
 	state := map[string]any{
 		"id":            "rpt_1",
 		"workspace_id":  "wsp_1",
@@ -31,6 +36,9 @@ func v021CostReportState(groupBy any) []byte {
 		},
 		"created_at": "2026-09-01T00:00:00Z",
 		"updated_at": "2026-09-02T00:00:00Z",
+	}
+	for name, value := range overrides {
+		state[name] = value
 	}
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -244,5 +252,57 @@ func TestCostReportUpgradeState_v0DefaultGroupingPlansClean(t *testing.T) {
 	}
 	if len(plan.RequiresReplace) != 0 {
 		t.Fatalf("plan replaces the report: %v", plan.RequiresReplace)
+	}
+}
+
+// Read looks the report up by the upgraded id, and a report it cannot find leaves state, so the
+// next apply creates a second one; every other attribute is the customer's report as v0.2.1 last
+// saw it, which a lost or swapped copy rewrites on the next apply. Each value is distinct so a
+// field copied from the wrong prior one fails too.
+func TestCostReportUpgradeState_v0CarriesTheReportOver(t *testing.T) {
+	t.Parallel()
+	settings := map[string]any{
+		"amortize": true, "include_credits": false, "include_refunds": true,
+		"include_tax": false, "show_forecast": true, "compare_to_last_period": false,
+	}
+	_, server, upgraded := upgradeCostReportState(t, v021CostReportStateWith("ServiceName", map[string]any{
+		"folder_id":     "fld_1",
+		"date_interval": "Custom",
+		"start_date":    "2026-01-01",
+		"end_date":      "2026-06-30",
+		"filter":        "costs.provider = 'aws'",
+		"settings":      settings,
+	}))
+
+	schemas, err := server.GetProviderSchema(context.Background(), &tfprotov6.GetProviderSchemaRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := upgraded.UpgradedState.Unmarshal(schemas.ResourceSchemas["costfluent_cost_report"].ValueType())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attrs, upgradedSettings map[string]tftypes.Value
+	if err := value.As(&attrs); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, want := range map[string]string{
+		"id": "rpt_1", "workspace_id": "wsp_1", "title": "Monthly", "folder_id": "fld_1",
+		"chart_type": "Bar", "date_bin": "Month", "date_interval": "Custom",
+		"start_date": "2026-01-01", "end_date": "2026-06-30", "filter": "costs.provider = 'aws'",
+		"created_at": "2026-09-01T00:00:00Z", "updated_at": "2026-09-02T00:00:00Z",
+	} {
+		wantString(t, attrs, name, want)
+	}
+
+	if err := attrs["settings"].As(&upgradedSettings); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range settings {
+		var got *bool
+		if err := upgradedSettings[name].As(&got); err != nil || got == nil || *got != want {
+			t.Fatalf("settings.%s = %v (%v), want v0.2.1's %v carried over", name, upgradedSettings[name], err, want)
+		}
 	}
 }

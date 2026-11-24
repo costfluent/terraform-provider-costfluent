@@ -21,17 +21,18 @@ type ProviderDataSource struct {
 }
 
 type ProviderDataSourceModel struct {
-	ID                   types.String `tfsdk:"id"`
-	Key                  types.String `tfsdk:"key"`
-	DisplayName          types.String `tfsdk:"display_name"`
-	Description          types.String `tfsdk:"description"`
-	Status               types.String `tfsdk:"status"`
-	SyncFrequencyMinutes types.Int64  `tfsdk:"sync_frequency_minutes"`
-	LastSyncAt           types.String `tfsdk:"last_sync_at"`
-	LastSyncStatus       types.String `tfsdk:"last_sync_status"`
-	NextSyncAt           types.String `tfsdk:"next_sync_at"`
-	CreatedAt            types.String `tfsdk:"created_at"`
-	UpdatedAt            types.String `tfsdk:"updated_at"`
+	ID                     types.String `tfsdk:"id"`
+	Key                    types.String `tfsdk:"key"`
+	DisplayName            types.String `tfsdk:"display_name"`
+	Description            types.String `tfsdk:"description"`
+	Status                 types.String `tfsdk:"status"`
+	SyncFrequencyMinutes   types.Int64  `tfsdk:"sync_frequency_minutes"`
+	EnableAutomaticSyncing types.Bool   `tfsdk:"enable_automatic_syncing"`
+	LastSyncAt             types.String `tfsdk:"last_sync_at"`
+	LastSyncStatus         types.String `tfsdk:"last_sync_status"`
+	NextSyncAt             types.String `tfsdk:"next_sync_at"`
+	CreatedAt              types.String `tfsdk:"created_at"`
+	UpdatedAt              types.String `tfsdk:"updated_at"`
 }
 
 func NewProviderDataSource() datasource.DataSource {
@@ -71,6 +72,10 @@ func (d *ProviderDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 			"sync_frequency_minutes": schema.Int64Attribute{
 				Computed:    true,
 				Description: "Sync frequency in minutes.",
+			},
+			"enable_automatic_syncing": schema.BoolAttribute{
+				Computed:    true,
+				Description: "Whether Costfluent syncs the connection on its schedule. When false, it syncs only when a sync is requested.",
 			},
 			"last_sync_at": schema.StringAttribute{
 				Computed:    true,
@@ -166,6 +171,7 @@ func (d *ProviderDataSource) Read(ctx context.Context, req datasource.ReadReques
 	config.DisplayName = types.StringValue(provider.DisplayName)
 	config.Status = types.StringValue(string(provider.Status))
 	config.SyncFrequencyMinutes = types.Int64Value(int64(provider.SyncFrequencyMinutes))
+	config.EnableAutomaticSyncing = types.BoolValue(provider.EnableAutomaticSyncing)
 	config.CreatedAt = types.StringValue(provider.CreatedAt.Format(time.RFC3339))
 
 	if provider.Description != nil {
