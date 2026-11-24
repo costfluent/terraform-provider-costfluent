@@ -63,10 +63,11 @@ resource "costfluent_provider" "azure" {
 ### Optional
 
 - `description` (String) Provider description.
+- `enable_automatic_syncing` (Boolean) Sync the connection on its schedule, every sync_frequency_minutes. When false, Costfluent syncs it only when a sync is requested, and next_sync_at is empty. Defaults to true.
 - `external_id` (String) The account identity the provider verified when connecting: the AWS account, the Azure tenant or the GCP billing account. Not the AWS assume-role external ID, which Costfluent issues and adds itself.
 - `parent_provider_id` (String) Parent provider ID for linked accounts. Fixed once connected: a plan that changes it is refused.
 - `settings` (Map of String) Provider-specific settings: export_bucket, export_bucket_region, export_prefix and export_name for an AWS FOCUS export, carbon_export_name for the AWS carbon emissions Data Export beside it, carbon_dataset for a GCP Carbon Footprint export dataset, cud_dataset for a GCP committed use discount metadata export dataset, and billing_scope for an Azure connection that collects a billing scope instead of its subscriptions: billingAccounts/{enrollment} for an Enterprise Agreement, or billingAccounts/{billing account id} or billingAccounts/{billing account id}/billingProfiles/{billing profile id} for a Microsoft Customer Agreement. Write-only: the API does not return them, so a change made outside Terraform is not detected. Changing them updates the provider in place, and removing or emptying them clears them.
-- `sync_frequency_minutes` (Number) Sync frequency in minutes, 60 to 1440. Defaults to 1440 (once a day).
+- `sync_frequency_minutes` (Number) Sync frequency in minutes, 60 to 10080 (once a week). Defaults to 1440 (once a day).
 
 ### Read-Only
 

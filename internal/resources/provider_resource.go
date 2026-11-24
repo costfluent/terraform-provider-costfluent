@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -30,21 +31,22 @@ type ProviderResource struct {
 }
 
 type ProviderResourceModel struct {
-	ID                   types.String `tfsdk:"id"`
-	Key                  types.String `tfsdk:"key"`
-	DisplayName          types.String `tfsdk:"display_name"`
-	Description          types.String `tfsdk:"description"`
-	Credentials          types.Map    `tfsdk:"credentials"`
-	Settings             types.Map    `tfsdk:"settings"`
-	Status               types.String `tfsdk:"status"`
-	ParentProviderID     types.String `tfsdk:"parent_provider_id"`
-	ExternalID           types.String `tfsdk:"external_id"`
-	SyncFrequencyMinutes types.Int64  `tfsdk:"sync_frequency_minutes"`
-	LastSyncAt           types.String `tfsdk:"last_sync_at"`
-	LastSyncStatus       types.String `tfsdk:"last_sync_status"`
-	NextSyncAt           types.String `tfsdk:"next_sync_at"`
-	CreatedAt            types.String `tfsdk:"created_at"`
-	UpdatedAt            types.String `tfsdk:"updated_at"`
+	ID                     types.String `tfsdk:"id"`
+	Key                    types.String `tfsdk:"key"`
+	DisplayName            types.String `tfsdk:"display_name"`
+	Description            types.String `tfsdk:"description"`
+	Credentials            types.Map    `tfsdk:"credentials"`
+	Settings               types.Map    `tfsdk:"settings"`
+	Status                 types.String `tfsdk:"status"`
+	ParentProviderID       types.String `tfsdk:"parent_provider_id"`
+	ExternalID             types.String `tfsdk:"external_id"`
+	SyncFrequencyMinutes   types.Int64  `tfsdk:"sync_frequency_minutes"`
+	EnableAutomaticSyncing types.Bool   `tfsdk:"enable_automatic_syncing"`
+	LastSyncAt             types.String `tfsdk:"last_sync_at"`
+	LastSyncStatus         types.String `tfsdk:"last_sync_status"`
+	NextSyncAt             types.String `tfsdk:"next_sync_at"`
+	CreatedAt              types.String `tfsdk:"created_at"`
+	UpdatedAt              types.String `tfsdk:"updated_at"`
 }
 
 func NewProviderResource() resource.Resource {
@@ -119,7 +121,14 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Optional:    true,
 				Computed:    true,
 				Default:     int64default.StaticInt64(1440),
-				Description: "Sync frequency in minutes, 60 to 1440. Defaults to 1440 (once a day).",
+				Description: "Sync frequency in minutes, 60 to 10080 (once a week). Defaults to 1440 (once a day).",
+			},
+			"enable_automatic_syncing": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(true),
+				Description: "Sync the connection on its schedule, every sync_frequency_minutes. When false, Costfluent " +
+					"syncs it only when a sync is requested, and next_sync_at is empty. Defaults to true.",
 			},
 			"status": schema.StringAttribute{
 				Computed:    true,
@@ -171,14 +180,16 @@ func (r *ProviderResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	minutes := int(plan.SyncFrequencyMinutes.ValueInt64())
+	syncing := plan.EnableAutomaticSyncing.ValueBool()
 	input := &costfluent.CreateProviderInput{
-		Key:                  costfluent.ProviderKey(plan.Key.ValueString()),
-		DisplayName:          plan.DisplayName.ValueString(),
-		Description:          knownString(plan.Description),
-		ParentProviderID:     knownString(plan.ParentProviderID),
-		ExternalID:           knownString(plan.ExternalID),
-		Credentials:          creds,
-		SyncFrequencyMinutes: &minutes,
+		Key:                    costfluent.ProviderKey(plan.Key.ValueString()),
+		DisplayName:            plan.DisplayName.ValueString(),
+		Description:            knownString(plan.Description),
+		ParentProviderID:       knownString(plan.ParentProviderID),
+		ExternalID:             knownString(plan.ExternalID),
+		Credentials:            creds,
+		SyncFrequencyMinutes:   &minutes,
+		EnableAutomaticSyncing: &syncing,
 	}
 	if !plan.Settings.IsNull() {
 		resp.Diagnostics.Append(plan.Settings.ElementsAs(ctx, &input.Settings, false)...)
@@ -276,6 +287,11 @@ func (r *ProviderResource) Update(ctx context.Context, req resource.UpdateReques
 	if !plan.SyncFrequencyMinutes.Equal(state.SyncFrequencyMinutes) {
 		minutes := int(plan.SyncFrequencyMinutes.ValueInt64())
 		input.SyncFrequencyMinutes = &minutes
+	}
+
+	if !plan.EnableAutomaticSyncing.Equal(state.EnableAutomaticSyncing) {
+		syncing := plan.EnableAutomaticSyncing.ValueBool()
+		input.EnableAutomaticSyncing = &syncing
 	}
 	if resp.Diagnostics.HasError() {
 		return
@@ -388,11 +404,13 @@ func upgradeProviderStateV0(ctx context.Context, req resource.UpgradeStateReques
 		ParentProviderID:     prior.ParentProviderID,
 		ExternalID:           prior.ExternalID,
 		SyncFrequencyMinutes: prior.SyncFrequencyMinutes,
-		LastSyncAt:           prior.LastSyncAt,
-		LastSyncStatus:       prior.LastSyncStatus,
-		NextSyncAt:           prior.NextSyncAt,
-		CreatedAt:            prior.CreatedAt,
-		UpdatedAt:            prior.UpdatedAt,
+		// Every connection synced on its schedule before the API could turn that off.
+		EnableAutomaticSyncing: types.BoolValue(true),
+		LastSyncAt:             prior.LastSyncAt,
+		LastSyncStatus:         prior.LastSyncStatus,
+		NextSyncAt:             prior.NextSyncAt,
+		CreatedAt:              prior.CreatedAt,
+		UpdatedAt:              prior.UpdatedAt,
 	})...)
 }
 
@@ -402,6 +420,7 @@ func mapProviderToModel(p *costfluent.Provider, model *ProviderResourceModel) {
 	model.DisplayName = types.StringValue(p.DisplayName)
 	model.Status = types.StringValue(string(p.Status))
 	model.SyncFrequencyMinutes = types.Int64Value(int64(p.SyncFrequencyMinutes))
+	model.EnableAutomaticSyncing = types.BoolValue(p.EnableAutomaticSyncing)
 	model.CreatedAt = types.StringValue(p.CreatedAt.Format(time.RFC3339))
 
 	// The API stores the empty string an update clears a description with, so an empty one is

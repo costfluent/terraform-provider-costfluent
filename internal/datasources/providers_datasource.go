@@ -23,15 +23,16 @@ type ProvidersDataSourceModel struct {
 }
 
 type ProviderModel struct {
-	ID                   types.String `tfsdk:"id"`
-	Key                  types.String `tfsdk:"key"`
-	DisplayName          types.String `tfsdk:"display_name"`
-	Description          types.String `tfsdk:"description"`
-	Status               types.String `tfsdk:"status"`
-	SyncFrequencyMinutes types.Int64  `tfsdk:"sync_frequency_minutes"`
-	LastSyncAt           types.String `tfsdk:"last_sync_at"`
-	LastSyncStatus       types.String `tfsdk:"last_sync_status"`
-	CreatedAt            types.String `tfsdk:"created_at"`
+	ID                     types.String `tfsdk:"id"`
+	Key                    types.String `tfsdk:"key"`
+	DisplayName            types.String `tfsdk:"display_name"`
+	Description            types.String `tfsdk:"description"`
+	Status                 types.String `tfsdk:"status"`
+	SyncFrequencyMinutes   types.Int64  `tfsdk:"sync_frequency_minutes"`
+	EnableAutomaticSyncing types.Bool   `tfsdk:"enable_automatic_syncing"`
+	LastSyncAt             types.String `tfsdk:"last_sync_at"`
+	LastSyncStatus         types.String `tfsdk:"last_sync_status"`
+	CreatedAt              types.String `tfsdk:"created_at"`
 }
 
 func NewProvidersDataSource() datasource.DataSource {
@@ -74,6 +75,10 @@ func (d *ProvidersDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 						"sync_frequency_minutes": schema.Int64Attribute{
 							Computed:    true,
 							Description: "Sync frequency in minutes.",
+						},
+						"enable_automatic_syncing": schema.BoolAttribute{
+							Computed:    true,
+							Description: "Whether Costfluent syncs the connection on its schedule. When false, it syncs only when a sync is requested.",
 						},
 						"last_sync_at": schema.StringAttribute{
 							Computed:    true,
@@ -118,12 +123,13 @@ func (d *ProvidersDataSource) Read(ctx context.Context, req datasource.ReadReque
 
 	for i, p := range providers {
 		state.Providers[i] = ProviderModel{
-			ID:                   types.StringValue(p.ID),
-			Key:                  types.StringValue(string(p.Key)),
-			DisplayName:          types.StringValue(p.DisplayName),
-			Status:               types.StringValue(string(p.Status)),
-			SyncFrequencyMinutes: types.Int64Value(int64(p.SyncFrequencyMinutes)),
-			CreatedAt:            types.StringValue(p.CreatedAt.Format(time.RFC3339)),
+			ID:                     types.StringValue(p.ID),
+			Key:                    types.StringValue(string(p.Key)),
+			DisplayName:            types.StringValue(p.DisplayName),
+			Status:                 types.StringValue(string(p.Status)),
+			SyncFrequencyMinutes:   types.Int64Value(int64(p.SyncFrequencyMinutes)),
+			EnableAutomaticSyncing: types.BoolValue(p.EnableAutomaticSyncing),
+			CreatedAt:              types.StringValue(p.CreatedAt.Format(time.RFC3339)),
 		}
 		if p.Description != nil {
 			state.Providers[i].Description = types.StringValue(*p.Description)

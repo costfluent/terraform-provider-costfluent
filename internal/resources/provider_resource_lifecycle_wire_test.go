@@ -19,19 +19,25 @@ func fakeProviders(api *fakeapi.Server) {
 		IDPrefix:  "prv_",
 		Versioned: true,
 		Create: func(body map[string]any) map[string]any {
+			// The server syncs a connection on its schedule unless the request says otherwise.
+			syncing, sent := body["enableAutomaticSyncing"]
+			if !sent {
+				syncing = true
+			}
 			return map[string]any{
-				"type":                 "cloud",
-				"key":                  body["key"],
-				"displayName":          body["displayName"],
-				"description":          body["description"],
-				"status":               "active",
-				"externalId":           "123456789012",
-				"parentProviderId":     body["parentProviderId"],
-				"lastSyncAt":           "2026-10-01T06:00:00Z",
-				"lastSyncStatus":       "succeeded",
-				"nextSyncAt":           "2026-10-02T06:00:00Z",
-				"syncFrequencyMinutes": body["syncFrequencyMinutes"],
-				"createdAt":            "2026-10-01T05:00:00Z",
+				"enableAutomaticSyncing": syncing,
+				"type":                   "cloud",
+				"key":                    body["key"],
+				"displayName":            body["displayName"],
+				"description":            body["description"],
+				"status":                 "active",
+				"externalId":             "123456789012",
+				"parentProviderId":       body["parentProviderId"],
+				"lastSyncAt":             "2026-10-01T06:00:00Z",
+				"lastSyncStatus":         "succeeded",
+				"nextSyncAt":             "2026-10-02T06:00:00Z",
+				"syncFrequencyMinutes":   body["syncFrequencyMinutes"],
+				"createdAt":              "2026-10-01T05:00:00Z",
 			}
 		},
 		Created: func(obj map[string]any) fakeapi.Response {
@@ -40,7 +46,7 @@ func fakeProviders(api *fakeapi.Server) {
 		Apply: func(obj, body map[string]any) {
 			// An empty description is stored and returned as the empty string; clearDescription
 			// removes it.
-			for _, k := range []string{"displayName", "description", "externalId", "syncFrequencyMinutes"} {
+			for _, k := range []string{"displayName", "description", "externalId", "syncFrequencyMinutes", "enableAutomaticSyncing"} {
 				if v, ok := body[k]; ok {
 					obj[k] = v
 				}
@@ -95,6 +101,7 @@ func TestProviderLifecycleSendsTheContractShape(t *testing.T) {
 					resource.TestCheckResourceAttr("costfluent_provider.aws", "description", "Billing account"),
 					resource.TestCheckResourceAttr("costfluent_provider.aws", "external_id", "123456789012"),
 					resource.TestCheckResourceAttr("costfluent_provider.aws", "sync_frequency_minutes", "1440"),
+					resource.TestCheckResourceAttr("costfluent_provider.aws", "enable_automatic_syncing", "true"),
 					resource.TestCheckResourceAttr("costfluent_provider.aws", "last_sync_at", "2026-10-01T06:00:00Z"),
 					resource.TestCheckResourceAttr("costfluent_provider.aws", "last_sync_status", "succeeded"),
 					resource.TestCheckResourceAttr("costfluent_provider.aws", "next_sync_at", "2026-10-02T06:00:00Z"),
@@ -108,7 +115,8 @@ func TestProviderLifecycleSendsTheContractShape(t *testing.T) {
 						switch {
 						case create.Body["key"] != "aws", create.Body["displayName"] != "AWS prod",
 							create.Body["description"] != "Billing account",
-							create.Body["syncFrequencyMinutes"] != float64(1440):
+							create.Body["syncFrequencyMinutes"] != float64(1440),
+							create.Body["enableAutomaticSyncing"] != true:
 							return fmt.Errorf("create body = %s", create.Raw)
 						case len(creds) != 1 || creds["role_arn"] != providerRoleArn:
 							return fmt.Errorf("create credentials = %v", creds)
@@ -147,7 +155,7 @@ func TestProviderLifecycleSendsTheContractShape(t *testing.T) {
 						case len(creds) != 1 || creds["role_arn"] != providerRotatedRoleArn:
 							return fmt.Errorf("update credentials = %v", creds)
 						}
-						for _, unchanged := range []string{"settings", "clearSettings", "description", "displayName", "externalId"} {
+						for _, unchanged := range []string{"settings", "clearSettings", "description", "displayName", "externalId", "enableAutomaticSyncing"} {
 							if _, sent := update.Body[unchanged]; sent {
 								return fmt.Errorf("update sent unchanged %s: %s", unchanged, update.Raw)
 							}
@@ -169,6 +177,87 @@ func TestProviderLifecycleSendsTheContractShape(t *testing.T) {
 				return fmt.Errorf("providers left after destroy: %v", ids)
 			}
 			return nil
+		},
+	})
+}
+
+// Once a week is the longest schedule the API takes, and a connection set to sync only when asked
+// is created that way rather than switched off after its first scheduled sync.
+func TestProviderWeeklyScheduleWithoutAutomaticSyncingIsSentOnCreate(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	fakeProviders(api)
+	config := providerLifecycleConfig(api, providerRoleArn, `  sync_frequency_minutes   = 10080
+  enable_automatic_syncing = false
+`)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_provider.aws", "sync_frequency_minutes", "10080"),
+					resource.TestCheckResourceAttr("costfluent_provider.aws", "enable_automatic_syncing", "false"),
+					func(*terraform.State) error {
+						create := api.LastRequest(http.MethodPost, "/v1/providers")
+						if create.Body["syncFrequencyMinutes"] != float64(10080) || create.Body["enableAutomaticSyncing"] != false {
+							return fmt.Errorf("create body = %s", create.Raw)
+						}
+						if n := len(api.Requests(http.MethodPut, "/v1/providers/"+providerOnlyID(t, api))); n != 0 {
+							return fmt.Errorf("create sent %d follow-up updates, want none", n)
+						}
+						return nil
+					},
+				),
+			},
+			{Config: config, PlanOnly: true},
+		},
+	})
+}
+
+// Turning automatic syncing off is an update in place that sends only the flag, and turning it back
+// on sends only the flag again.
+func TestProviderAutomaticSyncingUpdateSendsOnlyTheChangedField(t *testing.T) {
+	t.Parallel()
+	api := fakeapi.New(t)
+	fakeProviders(api)
+	onlySyncing := func(want bool) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			update := api.LastRequest(http.MethodPut, "/v1/providers/"+providerOnlyID(t, api))
+			if len(update.Body) != 1 || update.Body["enableAutomaticSyncing"] != want {
+				return fmt.Errorf("update body = %s, want only enableAutomaticSyncing %v", update.Raw, want)
+			}
+			return nil
+		}
+	}
+	off := providerLifecycleConfig(api, providerRoleArn, "  enable_automatic_syncing = false\n")
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{Config: providerLifecycleConfig(api, providerRoleArn, "")},
+			{
+				Config: off,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("costfluent_provider.aws", plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_provider.aws", "enable_automatic_syncing", "false"),
+					onlySyncing(false),
+				),
+			},
+			{Config: off, PlanOnly: true},
+			{
+				// Removing the attribute returns to the default, on.
+				Config: providerLifecycleConfig(api, providerRoleArn, ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("costfluent_provider.aws", "enable_automatic_syncing", "true"),
+					onlySyncing(true),
+				),
+			},
 		},
 	})
 }
@@ -395,10 +484,10 @@ func TestProviderAPIErrorsBecomeDiagnostics(t *testing.T) {
 			{
 				PreConfig: func() {
 					api.FailNext(http.MethodPut, "/v1/providers/"+providerOnlyID(t, api),
-						fakeapi.Problem(http.StatusBadRequest, "Validation", "SyncFrequencyMinutes must be between 60 and 1440"))
+						fakeapi.Problem(http.StatusBadRequest, "Validation", "SyncFrequencyMinutes must be between 60 and 10080"))
 				},
 				Config:      providerLifecycleConfig(api, providerRoleArn, "  sync_frequency_minutes = 61\n"),
-				ExpectError: regexp.MustCompile(`Failed to update provider(.|\n)*SyncFrequencyMinutes must be between 60 and 1440`),
+				ExpectError: regexp.MustCompile(`Failed to update provider(.|\n)*SyncFrequencyMinutes must be between 60 and 10080`),
 			},
 			{
 				PreConfig: func() {

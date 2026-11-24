@@ -54,7 +54,7 @@ func costReportFake(api *fakeapi.Server) {
 				"chartType":    "stackedBar",
 				"chartAxis":    "date",
 				"dateBin":      "day",
-				"dateInterval": "last30Days",
+				"dateInterval": "thisMonth",
 				"groupBy":      []any{map[string]any{"dimension": "serviceName"}},
 				"settings": map[string]any{"amortize": true, "includeCredits": false, "includeRefunds": false,
 					"includeTax": false, "showForecast": false, "compareToLastPeriod": false, "measure": "cost",
@@ -241,7 +241,7 @@ func TestCostReportLifecycleSendsTheContractShape(t *testing.T) {
 					resource.TestCheckResourceAttr("costfluent_cost_report.r", "folder_id", costReportFolder),
 					resource.TestCheckResourceAttr("costfluent_cost_report.r", "chart_type", "line"),
 					resource.TestCheckResourceAttr("costfluent_cost_report.r", "date_bin", "day"),
-					resource.TestCheckResourceAttr("costfluent_cost_report.r", "date_interval", "last30Days"),
+					resource.TestCheckResourceAttr("costfluent_cost_report.r", "date_interval", "thisMonth"),
 					// The API stores the JSON and canonical dimension; the configured spellings mean the same.
 					resource.TestCheckResourceAttr("costfluent_cost_report.r", "filter", costReportQuery),
 					resource.TestCheckResourceAttr("costfluent_cost_report.r", "group_by.0.dimension", "serviceName"),

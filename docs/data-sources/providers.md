@@ -45,6 +45,7 @@ Read-Only:
 - `created_at` (String) Creation timestamp.
 - `description` (String) Provider description.
 - `display_name` (String) Provider display name.
+- `enable_automatic_syncing` (Boolean) Whether Costfluent syncs the connection on its schedule. When false, it syncs only when a sync is requested.
 - `id` (String) Provider ID.
 - `key` (String) Provider type key.
 - `last_sync_at` (String) Last sync timestamp.

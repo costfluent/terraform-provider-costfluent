@@ -47,6 +47,7 @@ output "last_sync" {
 
 - `created_at` (String) Creation timestamp.
 - `description` (String) Provider description.
+- `enable_automatic_syncing` (Boolean) Whether Costfluent syncs the connection on its schedule. When false, it syncs only when a sync is requested.
 - `key` (String) Provider type key.
 - `last_sync_at` (String) Last sync timestamp.
 - `last_sync_status` (String) Last sync status.

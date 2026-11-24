@@ -108,3 +108,22 @@ func TestProviderSyncFrequencyDefaultsToOnceADay(t *testing.T) {
 		t.Fatalf("sync_frequency_minutes defaults to %d, want 1440", got)
 	}
 }
+
+// An apply that omits enable_automatic_syncing keeps the server's default, on, without planning a
+// change on every run.
+func TestProviderAutomaticSyncingDefaultsToOn(t *testing.T) {
+	t.Parallel()
+	var resp resource.SchemaResponse
+	(&ProviderResource{}).Schema(context.Background(), resource.SchemaRequest{}, &resp)
+
+	attribute := resp.Schema.Attributes["enable_automatic_syncing"].(schema.BoolAttribute)
+	if !attribute.Optional || !attribute.Computed {
+		t.Fatalf("enable_automatic_syncing optional %v computed %v, want both", attribute.Optional, attribute.Computed)
+	}
+	var value defaults.BoolResponse
+	attribute.Default.DefaultBool(context.Background(), defaults.BoolRequest{}, &value)
+
+	if !value.PlanValue.ValueBool() {
+		t.Fatal("enable_automatic_syncing defaults to false, want true")
+	}
+}

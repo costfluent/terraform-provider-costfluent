@@ -19,31 +19,33 @@ const (
 // syncedProviderJSON is a provider that has synced, with every optional field the response carries.
 func syncedProviderJSON() map[string]any {
 	return map[string]any{
-		"id":                   awsProvider,
-		"type":                 "cloud",
-		"key":                  "aws",
-		"displayName":          "AWS prod",
-		"description":          "Management account",
-		"status":               "active",
-		"lastSyncAt":           "2026-10-09T03:00:00Z",
-		"lastSyncStatus":       "succeeded",
-		"nextSyncAt":           "2026-10-10T03:00:00Z",
-		"syncFrequencyMinutes": 1440,
-		"createdAt":            "2026-09-01T08:30:00Z",
-		"updatedAt":            "2026-10-09T03:05:00Z",
+		"id":                     awsProvider,
+		"type":                   "cloud",
+		"key":                    "aws",
+		"displayName":            "AWS prod",
+		"description":            "Management account",
+		"status":                 "active",
+		"lastSyncAt":             "2026-10-09T03:00:00Z",
+		"lastSyncStatus":         "succeeded",
+		"nextSyncAt":             "2026-10-10T03:00:00Z",
+		"syncFrequencyMinutes":   1440,
+		"enableAutomaticSyncing": true,
+		"createdAt":              "2026-09-01T08:30:00Z",
+		"updatedAt":              "2026-10-09T03:05:00Z",
 	}
 }
 
 // newProviderJSON is a provider that has not synced yet: the optional fields are absent.
 func newProviderJSON() map[string]any {
 	return map[string]any{
-		"id":                   gcpProvider,
-		"type":                 "cloud",
-		"key":                  "gcp",
-		"displayName":          "GCP billing",
-		"status":               "pending",
-		"syncFrequencyMinutes": 360,
-		"createdAt":            "2026-10-08T10:00:00Z",
+		"id":                     gcpProvider,
+		"type":                   "cloud",
+		"key":                    "gcp",
+		"displayName":            "GCP billing",
+		"status":                 "pending",
+		"syncFrequencyMinutes":   10080,
+		"enableAutomaticSyncing": false,
+		"createdAt":              "2026-10-08T10:00:00Z",
 	}
 }
 
@@ -77,6 +79,7 @@ data "costfluent_provider" "p" {
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "description", "Management account"),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "status", "active"),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "sync_frequency_minutes", "1440"),
+				resource.TestCheckResourceAttr("data.costfluent_provider.p", "enable_automatic_syncing", "true"),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "last_sync_at", "2026-10-09T03:00:00Z"),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "last_sync_status", "succeeded"),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "next_sync_at", "2026-10-10T03:00:00Z"),
@@ -106,6 +109,8 @@ data "costfluent_provider" "p" {
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "id", gcpProvider),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "key", "gcp"),
 				resource.TestCheckResourceAttr("data.costfluent_provider.p", "status", "pending"),
+				resource.TestCheckResourceAttr("data.costfluent_provider.p", "sync_frequency_minutes", "10080"),
+				resource.TestCheckResourceAttr("data.costfluent_provider.p", "enable_automatic_syncing", "false"),
 				resource.TestCheckNoResourceAttr("data.costfluent_provider.p", "description"),
 				resource.TestCheckNoResourceAttr("data.costfluent_provider.p", "last_sync_at"),
 				resource.TestCheckNoResourceAttr("data.costfluent_provider.p", "last_sync_status"),

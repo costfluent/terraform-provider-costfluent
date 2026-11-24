@@ -2,7 +2,7 @@ terraform {
   required_providers {
     costfluent = {
       source  = "costfluent/costfluent"
-      version = "~> 0.6.0"
+      version = "~> 0.7.0"
     }
   }
 }

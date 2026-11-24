@@ -103,6 +103,10 @@ func TestProviderUpgradeState_v03CarriesTheConnectionOver(t *testing.T) {
 	}
 	wantNull(t, attrs, "parent_provider_id")
 	wantNull(t, attrs, "updated_at")
+	var syncing bool
+	if err := attrs["enable_automatic_syncing"].As(&syncing); err != nil || !syncing {
+		t.Fatalf("enable_automatic_syncing = %v (%v), want true", syncing, err)
+	}
 
 	var minutes big.Float
 	if err := attrs["sync_frequency_minutes"].As(&minutes); err != nil || minutes.Cmp(big.NewFloat(360)) != 0 {
